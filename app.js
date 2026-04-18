@@ -136,14 +136,14 @@ async function createChat(user1, user2) {
         "────────────────────\n" +
         "✅ You are now chatting with stranger!\n" +
         "👤 Partner ID: ||`" + user2 + "`||\n\n" +
-        "💬 Start talking...";
+        "💬 reply 'stop' to stop conversation, have fun.";
     
     const connectMsg2 = 
         "🎉 **CONNECTED!**\n" +
         "────────────────────\n" +
         "✅ You are now chatting with stranger!\n" +
         "👤 Partner ID: ||`" + user1 + "`||\n\n" +
-        "💬 Start talking...";
+        "💬 reply 'stop' to stop conversation, have fun.";
 
     await sendMessage(user1, connectMsg);
     await sendMessage(user2, connectMsg2);
