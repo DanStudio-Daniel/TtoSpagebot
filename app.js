@@ -5,23 +5,22 @@ const axios = require('axios');
 const app = express();
 app.use(bodyParser.json());
 
-// ⚠️ CONFIGURATION - FILL THESE IN
+// ⚙️ CONFIGURATION
 const PAGE_ACCESS_TOKEN = "EAAcLptP3AhgBRA5CXWfCWha5BKBWjFC8CM0hZBMFCLG8ZCZATN1DNHtg0iGQJ3g2Y2Y4Gc5lH0y5bfFafFKuHlPTD0826zfsxc5buUWY0XIiHF9s7yD5Rr8AGmMEYsgQJoJaWzDYYZCP4xpZChqdrgFRIWNa2ZAuk4jDaMlEmwrU6v1ZAbSkN2AILZBjbTMIRHaF0199PQZDZD";
+const VERIFY_TOKEN = "key";
 const PORT = process.env.PORT || 3000;
 
-// 📦 DATABASE (In-Memory, resets on restart)
+// 📦 DATABASE
 let waitingQueue = [];
 let activeChats = {}; // { userId: partnerId }
-let userMessageCount = {}; // Track message count for /stop rule
+let userMessageCount = {};
 
 // ==========================
 // WEBHOOK VERIFICATION
 // ==========================
 app.get('/webhook', (req, res) => {
-    const VERIFY_TOKEN = "key";
-    
     if (req.query['hub.mode'] === 'subscribe' && req.query['hub.verify_token'] === VERIFY_TOKEN) {
-        console.log("Webhook Verified ✅");
+        console.log("✅ Webhook Verified");
         res.status(200).send(req.query['hub.challenge']);
     } else {
         res.sendStatus(403);
@@ -37,13 +36,14 @@ app.post('/webhook', async (req, res) => {
     if (body.object === 'page') {
         body.entry.forEach(entry => {
             entry.messaging.forEach(async event => {
+                const senderId = event.sender.id;
+
+                // 👁️ AUTO SEEN
+                await markSeen(senderId);
+
                 if (event.message && event.message.text) {
-                    const senderId = event.sender.id;
                     const messageText = event.message.text.trim().toLowerCase();
-
-                    // Count messages
                     userMessageCount[senderId] = (userMessageCount[senderId] || 0) + 1;
-
                     await handleMessage(senderId, messageText);
                 }
             });
@@ -65,10 +65,10 @@ async function handleMessage(senderId, text) {
         return;
     }
 
-    // ⏹️ IF USER IS ALREADY IN CHAT, FORWARD MESSAGE
+    // ⏩ IF ALREADY IN CHAT
     if (activeChats[senderId]) {
         const partnerId = activeChats[senderId];
-        await sendMessage(partnerId, text);
+        await sendMessage(partnerId, `💬 ${text}`);
         return;
     }
 
@@ -78,8 +78,13 @@ async function handleMessage(senderId, text) {
         return;
     }
 
-    // ℹ️ DEFAULT MESSAGE
-    await sendMessage(senderId, "👋 Welcome to Stranger Chat!\nType *start* to find a partner.\nType *stop* to end conversation (requires 5+ messages).");
+    // ℹ️ DEFAULT WELCOME
+    await sendMessage(senderId, 
+        "👋 **Welcome to Stranger Chat!**\n\n" +
+        "🔍 Type *start* to find partner\n" +
+        "🛑 Type *stop* to end chat\n" +
+        "📝 *Need 5+ messages to use stop*"
+    );
 }
 
 // ==========================
@@ -87,58 +92,78 @@ async function handleMessage(senderId, text) {
 // ==========================
 async function handleStartCommand(userId) {
     
-    // Remove from queue if already there
-    waitingQueue = waitingQueue.filter(id => id !== userId);
+    // 🚫 CHECK: Already in chat?
+    if (activeChats[userId]) {
+        await sendMessage(userId, "⚠️ You are already in a conversation!\nType *stop* first if you want to change partner.");
+        return;
+    }
 
-    // Find someone waiting (not self)
+    // 🚫 CHECK: Already waiting in queue?
+    const isInQueue = waitingQueue.includes(userId);
+    if (isInQueue) {
+        await sendMessage(userId, "⏳ Please wait...\nYou are already in the searching list!");
+        return;
+    }
+
+    // ✅ Proceed to find partner
     const partnerId = waitingQueue.length > 0 ? waitingQueue.shift() : null;
 
     if (partnerId) {
-        // ✅ Match found!
         createChat(userId, partnerId);
     } else {
-        // ⏳ No one available, add to queue
+        await sendMessage(userId, 
+            "🔍 **Searching for stranger...**\n" +
+            "────────────────────\n" +
+            "bla bla bla 🎶\n" +
+            "looking for someone... ⏳"
+        );
         waitingQueue.push(userId);
-        await sendMessage(userId, "⏳ Searching for stranger...\nPlease wait...");
     }
 }
 
 // ==========================
 // CREATE CHAT
 // ==========================
-function createChat(user1, user2) {
-    // Link users
+async function createChat(user1, user2) {
     activeChats[user1] = user2;
     activeChats[user2] = user1;
     
-    // Reset message count
     userMessageCount[user1] = 0;
     userMessageCount[user2] = 0;
 
-    // Send notifications
-    sendMessage(user1, "🎉 You are now connected!\nYou can talk now.\nType *stop* to end chat.");
-    sendMessage(user2, "🎉 You are now connected!\nYou can talk now.\nType *stop* to end chat.");
+    const connectMsg = 
+        "🎉 **CONNECTED!**\n" +
+        "────────────────────\n" +
+        "✅ You are now chatting with stranger!\n" +
+        "👤 Partner ID: ||`" + user2 + "`||\n\n" +
+        "💬 Start talking...";
+    
+    const connectMsg2 = 
+        "🎉 **CONNECTED!**\n" +
+        "────────────────────\n" +
+        "✅ You are now chatting with stranger!\n" +
+        "👤 Partner ID: ||`" + user1 + "`||\n\n" +
+        "💬 Start talking...";
+
+    await sendMessage(user1, connectMsg);
+    await sendMessage(user2, connectMsg2);
 }
 
 // ==========================
-// STOP COMMAND LOGIC
+// STOP COMMAND
 // ==========================
 async function handleStopCommand(userId) {
-    // Check if user is in chat
     if (!activeChats[userId]) {
-        await sendMessage(userId, "❌ You are not in a conversation right now.");
+        await sendMessage(userId, "❌ You are not in any conversation.");
         return;
     }
 
-    // ✅ RULE: Can stop only if 5+ messages sent
     if ((userMessageCount[userId] || 0) < 5) {
-        await sendMessage(userId, "⚠️ You need to send at least *5 messages* before you can use 'stop'.");
+        await sendMessage(userId, "⚠️ *Oops!*\nYou need to send at least **5 messages** before you can stop.\nKeep chatting! 💬");
         return;
     }
 
     const partnerId = activeChats[userId];
-    
-    // End chat
     await endChat(userId, partnerId);
 }
 
@@ -151,17 +176,25 @@ async function endChat(user1, user2) {
     delete userMessageCount[user1];
     delete userMessageCount[user2];
 
-    await sendMessage(user1, "👋 Conversation ended.\nType *start* anytime to find a new stranger.");
-    await sendMessage(user2, "👋 Stranger has ended the conversation.\nType *start* anytime to find a new stranger.");
+    await sendMessage(user1, 
+        "👋 **CONVERSATION ENDED**\n" +
+        "────────────────────\n" +
+        "Hope you had fun! 😊\nType *start* to find new stranger."
+    );
+    
+    await sendMessage(user2, 
+        "👋 **STRANGER LEFT**\n" +
+        "────────────────────\n" +
+        "Your partner has left the chat.\nType *start* to find new stranger."
+    );
 }
 
 // ==========================
-// SEND MESSAGE FUNCTION
+// FUNCTIONS
 // ==========================
-async function sendMessage(recipientId, text) {
-    // Avoid empty messages
-    if (!text || text.trim() === "") return;
 
+async function sendMessage(recipientId, text) {
+    if (!text) return;
     try {
         await axios.post('https://graph.facebook.com/v18.0/me/messages', {
             recipient: { id: recipientId },
@@ -170,15 +203,26 @@ async function sendMessage(recipientId, text) {
             params: { access_token: PAGE_ACCESS_TOKEN }
         });
     } catch (error) {
-        console.error("Error sending message:", error.response?.data || error.message);
+        console.error("Error:", error.response?.data || error.message);
     }
+}
+
+async function markSeen(senderId) {
+    try {
+        await axios.post('https://graph.facebook.com/v18.0/me/messages', {
+            recipient: { id: senderId },
+            sender_action: "mark_seen"
+        }, {
+            params: { access_token: PAGE_ACCESS_TOKEN }
+        });
+    } catch (e) {}
 }
 
 // ==========================
 // START SERVER
 // ==========================
 app.listen(PORT, () => {
-    console.log(`🚀 Server running on port ${PORT}`);
-    console.log(`📊 Waiting Users: ${waitingQueue.length}`);
-    console.log(`💬 Active Chats: ${Object.keys(activeChats).length / 2}`);
+    console.log(`🚀 Server Running on Port ${PORT}`);
+    console.log(`📊 Queue: ${waitingQueue.length} | Active Chats: ${Object.keys(activeChats).length / 2}`);
 });
+                
