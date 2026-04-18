@@ -7,13 +7,71 @@ app.use(bodyParser.json());
 
 // ⚙️ CONFIGURATION
 const PAGE_ACCESS_TOKEN = "EAAcLptP3AhgBRA5CXWfCWha5BKBWjFC8CM0hZBMFCLG8ZCZATN1DNHtg0iGQJ3g2Y2Y4Gc5lH0y5bfFafFKuHlPTD0826zfsxc5buUWY0XIiHF9s7yD5Rr8AGmMEYsgQJoJaWzDYYZCP4xpZChqdrgFRIWNa2ZAuk4jDaMlEmwrU6v1ZAbSkN2AILZBjbTMIRHaF0199PQZDZD";
-const VERIFY_TOKEN = "key";
+const VERIFY_TOKEN = "key"; // ✅ SET TO "key"
+const ADMIN_PASSWORD = "dan122012";
 const PORT = process.env.PORT || 3000;
 
 // 📦 DATABASE
 let waitingQueue = [];
-let activeChats = {}; // { userId: partnerId }
+let activeChats = {};
 let userMessageCount = {};
+let bannedUsers = [];
+
+// ==========================
+// 🏠 HOME PAGE
+// ==========================
+app.get('/', (req, res) => {
+    res.send(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Stranger Chat Bot</title>
+            <style>
+                body {
+                    font-family: Arial, sans-serif;
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                    height: 100vh;
+                    margin: 0;
+                }
+                .container {
+                    background: white;
+                    padding: 40px;
+                    border-radius: 15px;
+                    box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+                    text-align: center;
+                }
+                .status {
+                    width: 80px;
+                    height: 80px;
+                    background: #2ecc71;
+                    border-radius: 50%;
+                    margin: 0 auto 20px;
+                    position: relative;
+                    animation: pulse 2s infinite;
+                }
+                @keyframes pulse {
+                    0% { box-shadow: 0 0 0 0 rgba(46, 204, 113, 0.7); }
+                    70% { box-shadow: 0 0 0 20px rgba(46, 204, 113, 0); }
+                    100% { box-shadow: 0 0 0 0 rgba(46, 204, 113, 0); }
+                }
+                h1 { color: #2c3e50; margin-bottom: 10px; }
+                p { color: #7f8c8d; font-size: 18px; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="status"></div>
+                <h1>✅ BOT IS RUNNING</h1>
+                <p>Stranger Chat System is Online!</p>
+                <p>🔑 Verify Key: key</p>
+            </div>
+        </body>
+        </html>
+    `);
+});
 
 // ==========================
 // WEBHOOK VERIFICATION
@@ -38,13 +96,22 @@ app.post('/webhook', async (req, res) => {
             entry.messaging.forEach(async event => {
                 const senderId = event.sender.id;
 
-                // 👁️ AUTO SEEN
+                if (bannedUsers.includes(senderId)) {
+                    await sendMessage(senderId, "🚫 You are banned from using this bot.");
+                    return;
+                }
+
                 await markSeen(senderId);
 
                 if (event.message && event.message.text) {
-                    const messageText = event.message.text.trim().toLowerCase();
+                    const messageText = event.message.text.trim();
+                    const lowerText = messageText.toLowerCase();
+                    
                     userMessageCount[senderId] = (userMessageCount[senderId] || 0) + 1;
-                    await handleMessage(senderId, messageText);
+                    await handleMessage(senderId, messageText, lowerText);
+                }
+                else if (event.reaction) {
+                    await handleReaction(event);
                 }
             });
         });
@@ -57,28 +124,34 @@ app.post('/webhook', async (req, res) => {
 // ==========================
 // MAIN LOGIC
 // ==========================
-async function handleMessage(senderId, text) {
+async function handleMessage(senderId, text, lowerText) {
 
-    // 🛑 COMMAND: STOP
-    if (text === "stop") {
+    if (lowerText === "stop") {
         await handleStopCommand(senderId);
         return;
     }
 
-    // ⏩ IF ALREADY IN CHAT
+    if (text.startsWith("/ban ")) {
+        await handleBanCommand(senderId, text);
+        return;
+    }
+
+    if (text.startsWith("/unban ")) {
+        await handleUnbanCommand(senderId, text);
+        return;
+    }
+
     if (activeChats[senderId]) {
         const partnerId = activeChats[senderId];
         await sendMessage(partnerId, `💬 ${text}`);
         return;
     }
 
-    // 🚀 COMMAND: START
-    if (text === "start") {
+    if (lowerText === "start") {
         await handleStartCommand(senderId);
         return;
     }
 
-    // ℹ️ DEFAULT WELCOME
     await sendMessage(senderId, 
         "👋 **Welcome to Stranger Chat!**\n\n" +
         "🔍 Type *start* to find partner\n" +
@@ -92,20 +165,17 @@ async function handleMessage(senderId, text) {
 // ==========================
 async function handleStartCommand(userId) {
     
-    // 🚫 CHECK: Already in chat?
     if (activeChats[userId]) {
-        await sendMessage(userId, "⚠️ You are already in a conversation!\nType *stop* first if you want to change partner.");
+        await sendMessage(userId, "⚠️ Already in conversation!\nType *stop* first.");
         return;
     }
 
-    // 🚫 CHECK: Already waiting in queue?
     const isInQueue = waitingQueue.includes(userId);
     if (isInQueue) {
-        await sendMessage(userId, "⏳ Please wait...\nYou are already in the searching list!");
+        await sendMessage(userId, "⏳ Already searching... wait!");
         return;
     }
 
-    // ✅ Proceed to find partner
     const partnerId = waitingQueue.length > 0 ? waitingQueue.shift() : null;
 
     if (partnerId) {
@@ -115,7 +185,8 @@ async function handleStartCommand(userId) {
             "🔍 **Searching for stranger...**\n" +
             "────────────────────\n" +
             "bla bla bla 🎶\n" +
-            "looking for someone... ⏳"
+            "looking for someone... ⏳\n\n" +
+            "📖 **Guide:** You can type *stop* anytime to end chat!"
         );
         waitingQueue.push(userId);
     }
@@ -134,16 +205,24 @@ async function createChat(user1, user2) {
     const connectMsg = 
         "🎉 **CONNECTED!**\n" +
         "────────────────────\n" +
-        "✅ You are now chatting with stranger!\n" +
-        "👤 Partner ID: ||`" + user2 + "`||\n\n" +
-        "💬 reply 'stop' to stop conversation, have fun.";
+        "🆔 Your ID: `" + user1 + "`\n" +
+        "👤 Stranger ID: `" + user2 + "`\n\n" +
+        "📖 **GUIDE**\n" +
+        "• Type *stop* to end chat\n" +
+        "• Need 5+ messages to use stop\n" +
+        "• React messages are supported ❤️\n\n" +
+        "💬 Start talking...";
     
     const connectMsg2 = 
         "🎉 **CONNECTED!**\n" +
         "────────────────────\n" +
-        "✅ You are now chatting with stranger!\n" +
-        "👤 Partner ID: ||`" + user1 + "`||\n\n" +
-        "💬 reply 'stop' to stop conversation, have fun.";
+        "🆔 Your ID: `" + user2 + "`\n" +
+        "👤 Stranger ID: `" + user1 + "`\n\n" +
+        "📖 **GUIDE**\n" +
+        "• Type *stop* to end chat\n" +
+        "• Need 5+ messages to use stop\n" +
+        "• React messages are supported ❤️\n\n" +
+        "💬 Start talking...";
 
     await sendMessage(user1, connectMsg);
     await sendMessage(user2, connectMsg2);
@@ -154,12 +233,12 @@ async function createChat(user1, user2) {
 // ==========================
 async function handleStopCommand(userId) {
     if (!activeChats[userId]) {
-        await sendMessage(userId, "❌ You are not in any conversation.");
+        await sendMessage(userId, "❌ Not in any conversation.");
         return;
     }
 
     if ((userMessageCount[userId] || 0) < 5) {
-        await sendMessage(userId, "⚠️ *Oops!*\nYou need to send at least **5 messages** before you can stop.\nKeep chatting! 💬");
+        await sendMessage(userId, "⚠️ Need **5 messages** first before you can stop!");
         return;
     }
 
@@ -179,29 +258,78 @@ async function endChat(user1, user2) {
     await sendMessage(user1, 
         "👋 **CONVERSATION ENDED**\n" +
         "────────────────────\n" +
-        "Hope you had fun! 😊\nType *start* to find new stranger."
+        "Type *start* to find new stranger."
     );
     
     await sendMessage(user2, 
         "👋 **STRANGER LEFT**\n" +
         "────────────────────\n" +
-        "Your partner has left the chat.\nType *start* to find new stranger."
+        "Type *start* to find new stranger."
     );
+}
+
+// ==========================
+// 🔒 BAN & UNBAN SYSTEM
+// ==========================
+async function handleBanCommand(senderId, text) {
+    const parts = text.split(" ");
+    if (parts.length < 3) return await sendMessage(senderId, "❌ Use: /ban <pass> <id>");
+
+    const inputPass = parts[1];
+    const targetId = parts[2];
+
+    if (inputPass !== ADMIN_PASSWORD) return await sendMessage(senderId, "❌ Wrong Password!");
+
+    if (!bannedUsers.includes(targetId)) {
+        bannedUsers.push(targetId);
+        await sendMessage(senderId, `✅ **BANNED!**\nID: \`${targetId}\``);
+    } else {
+        await sendMessage(senderId, "⚠️ Already banned.");
+    }
+}
+
+async function handleUnbanCommand(senderId, text) {
+    const parts = text.split(" ");
+    if (parts.length < 3) return await sendMessage(senderId, "❌ Use: /unban <pass> <id>");
+
+    const inputPass = parts[1];
+    const targetId = parts[2];
+
+    if (inputPass !== ADMIN_PASSWORD) return await sendMessage(senderId, "❌ Wrong Password!");
+
+    if (bannedUsers.includes(targetId)) {
+        bannedUsers = bannedUsers.filter(id => id !== targetId);
+        await sendMessage(senderId, `✅ **UNBANNED!**\nID: \`${targetId}\``);
+    } else {
+        await sendMessage(senderId, "⚠️ User not banned.");
+    }
+}
+
+// ==========================
+// 😍 REACTION SYSTEM
+// ==========================
+async function handleReaction(event) {
+    const senderId = event.sender.id;
+    if (!activeChats[senderId]) return;
+
+    const partnerId = activeChats[senderId];
+    const emoji = event.reaction.emoji || "👍";
+
+    if (event.reaction.action === "react") {
+        await sendReaction(partnerId, event.reaction.message_id, emoji);
+    }
 }
 
 // ==========================
 // FUNCTIONS
 // ==========================
-
 async function sendMessage(recipientId, text) {
     if (!text) return;
     try {
         await axios.post('https://graph.facebook.com/v18.0/me/messages', {
             recipient: { id: recipientId },
             message: { text: text }
-        }, {
-            params: { access_token: PAGE_ACCESS_TOKEN }
-        });
+        }, { params: { access_token: PAGE_ACCESS_TOKEN } });
     } catch (error) {
         console.error("Error:", error.response?.data || error.message);
     }
@@ -212,10 +340,20 @@ async function markSeen(senderId) {
         await axios.post('https://graph.facebook.com/v18.0/me/messages', {
             recipient: { id: senderId },
             sender_action: "mark_seen"
-        }, {
-            params: { access_token: PAGE_ACCESS_TOKEN }
-        });
+        }, { params: { access_token: PAGE_ACCESS_TOKEN } });
     } catch (e) {}
+}
+
+async function sendReaction(recipientId, messageId, emoji) {
+    try {
+        await axios.post('https://graph.facebook.com/v18.0/me/messages', {
+            recipient: { id: recipientId },
+            message_id: messageId,
+            reaction: { emoji: emoji }
+        }, { params: { access_token: PAGE_ACCESS_TOKEN } });
+    } catch (error) {
+        console.error("Reaction Error:", error.response?.data || error.message);
+    }
 }
 
 // ==========================
@@ -223,6 +361,8 @@ async function markSeen(senderId) {
 // ==========================
 app.listen(PORT, () => {
     console.log(`🚀 Server Running on Port ${PORT}`);
-    console.log(`📊 Queue: ${waitingQueue.length} | Active Chats: ${Object.keys(activeChats).length / 2}`);
+    console.log(`🔑 Verify Key: ${VERIFY_TOKEN}`);
+    console.log(`🔐 Admin Pass: ${ADMIN_PASSWORD}`);
+    console.log(`📊 Queue: ${waitingQueue.length} | Banned: ${bannedUsers.length}`);
 });
-                
+    
