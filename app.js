@@ -10,12 +10,14 @@ const PAGE_ACCESS_TOKEN = "EAAcLptP3AhgBRA5CXWfCWha5BKBWjFC8CM0hZBMFCLG8ZCZATN1D
 const VERIFY_TOKEN = "key";
 const ADMIN_PASSWORD = "dan122012";
 const PORT = process.env.PORT || 3000;
+const TIMEOUT_MIN = 60000; // 1 minute in ms
 
 // 📦 DATABASE
 let waitingQueue = [];
 let activeChats = {};
 let userMessageCount = {};
 let bannedUsers = [];
+let timeouts = new Map(); // For auto stop
 
 // ==========================
 // 🏠 HOME PAGE
@@ -48,7 +50,7 @@ app.post('/webhook', async (req, res) => {
                 const senderId = event.sender.id;
 
                 if (bannedUsers.includes(senderId)) {
-                    await sendMessage(senderId, "🚫 You are banned from using this bot. if you think this is a mistake please contact owner.");
+                    await sendMessage(senderId, "🚫 You are banned from using this bot.");
                     return;
                 }
 
@@ -60,6 +62,7 @@ app.post('/webhook', async (req, res) => {
                         const att = event.message.attachments[0];
                         if (att.type === 'image' && activeChats[senderId]) {
                             await sendImage(activeChats[senderId], att.payload.url);
+                            resetTimeout(senderId);
                         }
                     }
                     // 📝 TEXT
@@ -68,12 +71,7 @@ app.post('/webhook', async (req, res) => {
                         const lowerText = text.toLowerCase();
                         userMessageCount[senderId] = (userMessageCount[senderId] || 0) + 1;
                         await handleMessage(senderId, text, lowerText);
-                    }
-                }
-                // 😍 REACTION TO TARGET MESSAGE
-                else if (event.reaction && activeChats[senderId]) {
-                    if (event.reaction.action === "react") {
-                        await sendReaction(activeChats[senderId], event.reaction.message_id, event.reaction.emoji);
+                        resetTimeout(senderId);
                     }
                 }
             });
@@ -83,6 +81,35 @@ app.post('/webhook', async (req, res) => {
         res.sendStatus(404);
     }
 });
+
+// ==========================
+// ⏰ AUTO TIMEOUT SYSTEM
+// ==========================
+function resetTimeout(userId) {
+    if (!activeChats[userId]) return;
+    const partner = activeChats[userId];
+    
+    // Clear existing timeouts
+    if (timeouts.has(userId)) clearTimeout(timeouts.get(userId));
+    if (timeouts.has(partner)) clearTimeout(timeouts.get(partner));
+
+    // Set new timeout
+    const t1 = setTimeout(() => endChatTimeout(userId, partner), TIMEOUT_MIN);
+    const t2 = setTimeout(() => endChatTimeout(partner, userId), TIMEOUT_MIN);
+    
+    timeouts.set(userId, t1);
+    timeouts.set(partner, t2);
+}
+
+async function endChatTimeout(user1, user2) {
+    delete activeChats[user1];
+    delete activeChats[user2];
+    delete userMessageCount[user1];
+    delete userMessageCount[user2];
+    
+    await sendMessage(user1, "⏰ **AUTO STOPPED**\n────────────────────\nNo reply for 1 minute.");
+    await sendMessage(user2, "⏰ **AUTO STOPPED**\n────────────────────\nNo reply for 1 minute.");
+}
 
 // ==========================
 // MAIN LOGIC
@@ -118,19 +145,26 @@ async function handleMessage(senderId, text, lowerText) {
         return;
     }
 
-    if (text.startsWith("/noti ")) {
+    if (text.startsWith("/announce ")) {
         const p = text.split(" ");
         if (p[1] !== ADMIN_PASSWORD) return sendMessage(senderId, "❌ Wrong Password!");
         const msg = p.slice(2).join(" ");
         const all = [...new Set([...Object.keys(activeChats), ...waitingQueue])];
-        all.forEach(u => sendMessage(u, `📢 [announcement] 📢\n\n${msg}`));
-        await sendMessage(senderId, `✅ Broadcast sent!`);
+        
+        const announcement = 
+            `📢 **GLOBAL ANNOUNCEMENT**\n` +
+            `────────────────────\n` +
+            `${msg}\n` +
+            `────────────────────`;
+            
+        all.forEach(u => sendMessage(u, announcement));
+        await sendMessage(senderId, `✅ Announcement sent to ${all.length} users!`);
         return;
     }
 
     if (activeChats[senderId]) {
         const partner = activeChats[senderId];
-        await sendMessage(partner, text); // ❌ Removed 💬
+        await sendMessage(partner, text);
         return;
     }
 
@@ -153,7 +187,8 @@ async function handleMessage(senderId, text, lowerText) {
                 `📖 **GUIDE**\n` +
                 `• Type *stop* to end chat\n` +
                 `• Need 5+ messages to use stop\n` +
-                `• Images & Reactions supported ❤️\n\n` +
+                `• Auto stop after 1min no reply ⏰\n` +
+                `• Images supported 🖼️\n\n` +
                 `Start talking...`
             );
             await sendMessage(partner, 
@@ -164,9 +199,13 @@ async function handleMessage(senderId, text, lowerText) {
                 `📖 **GUIDE**\n` +
                 `• Type *stop* to end chat\n` +
                 `• Need 5+ messages to use stop\n` +
-                `• Images & Reactions supported ❤️\n\n` +
+                `• Auto stop after 1min no reply ⏰\n` +
+                `• Images supported 🖼️\n\n` +
                 `Start talking...`
             );
+            
+            // Start timeout
+            resetTimeout(senderId);
         } else {
             waitingQueue.push(senderId);
             await sendMessage(senderId, 
@@ -183,6 +222,7 @@ async function handleMessage(senderId, text, lowerText) {
         `👋 **Welcome to Stranger Chat!**\n\n` +
         `🔍 Type *start* to find partner\n` +
         `🛑 Type *stop* to end chat\n` +
+        `⏰ Auto stop if no reply 1min\n` +
         `📝 Need 5+ messages to use stop`
     );
 }
@@ -215,17 +255,10 @@ async function markSeen(id) {
     } catch (e) {}
 }
 
-async function sendReaction(id, mid, emoji) {
-    try {
-        await axios.post('https://graph.facebook.com/v18.0/me/messages', {
-            recipient: { id }, message_id: mid, reaction: { emoji }
-        }, { params: { access_token: PAGE_ACCESS_TOKEN } });
-    } catch (e) {}
-}
-
 // ==========================
 // START SERVER
 // ==========================
 app.listen(PORT, () => {
     console.log(`🚀 Bot Running on port ${PORT}`);
 });
+    
