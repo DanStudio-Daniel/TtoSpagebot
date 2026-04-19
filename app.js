@@ -48,7 +48,7 @@ app.post('/webhook', async (req, res) => {
                 const senderId = event.sender.id;
 
                 if (bannedUsers.includes(senderId)) {
-                    await sendMessage(senderId, "🚫 You are banned from using this bot.");
+                    await sendMessage(senderId, "🚫 You are banned from using this bot. if you think this is a mistake please contact owner.");
                     return;
                 }
 
@@ -123,7 +123,7 @@ async function handleMessage(senderId, text, lowerText) {
         if (p[1] !== ADMIN_PASSWORD) return sendMessage(senderId, "❌ Wrong Password!");
         const msg = p.slice(2).join(" ");
         const all = [...new Set([...Object.keys(activeChats), ...waitingQueue])];
-        all.forEach(u => sendMessage(u, `📢 **[OWNER]**: ${msg}`));
+        all.forEach(u => sendMessage(u, `📢 [announcement] 📢\n\n${msg}`));
         await sendMessage(senderId, `✅ Broadcast sent!`);
         return;
     }
