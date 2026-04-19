@@ -10,14 +10,14 @@ const PAGE_ACCESS_TOKEN = "EAAcLptP3AhgBRA5CXWfCWha5BKBWjFC8CM0hZBMFCLG8ZCZATN1D
 const VERIFY_TOKEN = "key";
 const ADMIN_PASSWORD = "dan122012";
 const PORT = process.env.PORT || 3000;
-const TIMEOUT_MIN = 300000; // 5 minutes in ms
 
 // 📦 DATABASE
 let waitingQueue = [];
 let activeChats = {};
 let userMessageCount = {};
 let bannedUsers = [];
-let timeouts = new Map();
+let users = new Map();
+let names = new Map();
 
 // ==========================
 // 🏠 HOME PAGE
@@ -50,7 +50,7 @@ app.post('/webhook', async (req, res) => {
                 const senderId = event.sender.id;
 
                 if (bannedUsers.includes(senderId)) {
-                    await sendMessage(senderId, "🚫 You are banned from using this bot.");
+                    await sendMessage(senderId, "🚫 **BANNED**\n────────────────────\nYou are banned from using this bot.");
                     return;
                 }
 
@@ -61,7 +61,6 @@ app.post('/webhook', async (req, res) => {
                         const att = event.message.attachments[0];
                         if (att.type === 'image' && activeChats[senderId]) {
                             await sendImage(activeChats[senderId], att.payload.url);
-                            resetTimeout(senderId);
                         }
                     }
                     else if (event.message.text) {
@@ -69,7 +68,6 @@ app.post('/webhook', async (req, res) => {
                         const lowerText = text.toLowerCase();
                         userMessageCount[senderId] = (userMessageCount[senderId] || 0) + 1;
                         await handleMessage(senderId, text, lowerText);
-                        resetTimeout(senderId);
                     }
                 }
             });
@@ -81,84 +79,53 @@ app.post('/webhook', async (req, res) => {
 });
 
 // ==========================
-// ⏰ AUTO TIMEOUT SYSTEM
-// ==========================
-function resetTimeout(userId) {
-    if (!activeChats[userId]) return;
-    const partner = activeChats[userId];
-    
-    if (timeouts.has(userId)) clearTimeout(timeouts.get(userId));
-    if (timeouts.has(partner)) clearTimeout(timeouts.get(partner));
-
-    const timeout = setTimeout(async () => {
-        if (!activeChats[userId] || !activeChats[partner]) return;
-        
-        delete activeChats[userId];
-        delete activeChats[partner];
-        delete userMessageCount[userId];
-        delete userMessageCount[partner];
-        
-        const msg = 
-            `🛑 **CONVO STOPPED**\n` +
-            `────────────────────\n` +
-            `Conversation stopped because noone replied after 5mins`;
-            
-        await sendMessage(userId, msg);
-        await sendMessage(partner, msg);
-    }, TIMEOUT_MIN);
-    
-    timeouts.set(userId, timeout);
-    timeouts.set(partner, timeout);
-}
-
-// ==========================
 // MAIN LOGIC
 // ==========================
 async function handleMessage(senderId, text, lowerText) {
 
+    // 📝 SET USERNAME (NEW USER ONLY)
+    if (!users.has(senderId)) {
+        await sendMessage(senderId, 
+            `👋 **WELCOME**\n` +
+            `────────────────────\n` +
+            `Please send your username only`
+        );
+        if (names.has(text)) {
+            return sendMessage(senderId, "❌ **USERNAME TAKEN**\n────────────────────\nChoose another name.");
+        }
+        users.set(senderId, text);
+        names.set(text, senderId);
+        return sendMessage(senderId, `✅ **NAME SET**\n────────────────────\n${text}`);
+    }
+
     if (lowerText === "stop") {
-        if (!activeChats[senderId]) return sendMessage(senderId, "❌ Not in any conversation.");
-        if ((userMessageCount[senderId] || 0) < 5) return sendMessage(senderId, "⚠️ Need **5 messages** first before you can stop!");
+        if (!activeChats[senderId]) return sendMessage(senderId, "❌ **NOT IN CHAT**");
+        if ((userMessageCount[senderId] || 0) < 5) return sendMessage(senderId, "⚠️ **CANNOT STOP**\n────────────────────\nNeed 5+ messages first.");
         const partner = activeChats[senderId];
         delete activeChats[senderId];
         delete activeChats[partner];
         delete userMessageCount[senderId];
         delete userMessageCount[partner];
-        await sendMessage(senderId, "👋 **CONVERSATION ENDED**\n────────────────────\nType *start* to find new stranger.");
-        await sendMessage(partner, "👋 **STRANGER LEFT**\n────────────────────\nType *start* to find new stranger.");
+        await sendMessage(senderId, "👋 **CONVO ENDED**\n────────────────────\nType start to find new.");
+        await sendMessage(partner, "👋 **STRANGER LEFT**\n────────────────────\nType start to find new.");
         return;
     }
 
     if (text.startsWith("/ban ")) {
         const p = text.split(" ");
-        if (p[1] !== ADMIN_PASSWORD) return sendMessage(senderId, "❌ Wrong Password!");
-        if (!bannedUsers.includes(p[2])) bannedUsers.push(p[2]);
-        await sendMessage(senderId, `✅ **BANNED!**\nID: \`${p[2]}\``);
+        if (p[1] !== ADMIN_PASSWORD) return sendMessage(senderId, "❌ **WRONG PASSWORD**");
+        const targetId = names.get(p[2]) || p[2];
+        if (!bannedUsers.includes(targetId)) bannedUsers.push(targetId);
+        await sendMessage(senderId, `✅ **BANNED**\n────────────────────\nUser: ${p[2]}`);
         return;
     }
 
     if (text.startsWith("/unban ")) {
         const p = text.split(" ");
-        if (p[1] !== ADMIN_PASSWORD) return sendMessage(senderId, "❌ Wrong Password!");
-        bannedUsers = bannedUsers.filter(id => id !== p[2]);
-        await sendMessage(senderId, `✅ **UNBANNED!**\nID: \`${p[2]}\``);
-        return;
-    }
-
-    if (text.startsWith("/announce ")) {
-        const p = text.split(" ");
-        if (p[1] !== ADMIN_PASSWORD) return sendMessage(senderId, "❌ Wrong Password!");
-        const msg = p.slice(2).join(" ");
-        const all = [...new Set([...Object.keys(activeChats), ...waitingQueue])];
-        
-        const announcement = 
-            `📢 **GLOBAL ANNOUNCEMENT**\n` +
-            `────────────────────\n` +
-            `${msg}\n` +
-            `────────────────────`;
-            
-        all.forEach(u => sendMessage(u, announcement));
-        await sendMessage(senderId, `✅ Announcement sent to ${all.length} users!`);
+        if (p[1] !== ADMIN_PASSWORD) return sendMessage(senderId, "❌ **WRONG PASSWORD**");
+        const targetId = names.get(p[2]) || p[2];
+        bannedUsers = bannedUsers.filter(id => id !== targetId);
+        await sendMessage(senderId, `✅ **UNBANNED**\n────────────────────\nUser: ${p[2]}`);
         return;
     }
 
@@ -169,8 +136,8 @@ async function handleMessage(senderId, text, lowerText) {
     }
 
     if (lowerText === "start") {
-        if (activeChats[senderId]) return sendMessage(senderId, "⚠️ Already in conversation!\nType *stop* first.");
-        if (waitingQueue.includes(senderId)) return sendMessage(senderId, "⏳ Already searching... wait!");
+        if (activeChats[senderId]) return sendMessage(senderId, "⚠️ **ALREADY IN CHAT**");
+        if (waitingQueue.includes(senderId)) return sendMessage(senderId, "🔍 **SEARCHING...**");
 
         const partner = waitingQueue.length > 0 ? waitingQueue.shift() : null;
         if (partner) {
@@ -179,51 +146,33 @@ async function handleMessage(senderId, text, lowerText) {
             userMessageCount[senderId] = 0;
             userMessageCount[partner] = 0;
 
+            const myName = users.get(senderId);
+            const partnerName = users.get(partner);
+
             await sendMessage(senderId, 
                 `🎉 **CONNECTED!**\n` +
                 `────────────────────\n` +
-                `🆔 Your ID: \`${senderId}\`\n` +
-                `👤 Stranger ID: \`${partner}\`\n\n` +
-                `📖 **GUIDE**\n` +
-                `• Type *stop* to end chat\n` +
-                `• Need 5+ messages to use stop\n` +
-                `• Auto stop after 5mins no reply ⏰\n` +
-                `• Images supported 🖼️\n\n` +
-                `Start talking...`
+                `You are talking to: ${partnerName}\n\n` +
+                `📖 • Type stop to end\n` +
+                `📖 • Need 5+ msg to stop\n` +
+                `📖 • Images supported 🖼️`
             );
             await sendMessage(partner, 
                 `🎉 **CONNECTED!**\n` +
                 `────────────────────\n` +
-                `🆔 Your ID: \`${partner}\`\n` +
-                `👤 Stranger ID: \`${senderId}\`\n\n` +
-                `📖 **GUIDE**\n` +
-                `• Type *stop* to end chat\n` +
-                `• Need 5+ messages to use stop\n` +
-                `• Auto stop after 5mins no reply ⏰\n` +
-                `• Images supported 🖼️\n\n` +
-                `Start talking...`
+                `You are talking to: ${myName}\n\n` +
+                `📖 • Type stop to end\n` +
+                `📖 • Need 5+ msg to stop\n` +
+                `📖 • Images supported 🖼️`
             );
-            
-            resetTimeout(senderId);
         } else {
             waitingQueue.push(senderId);
-            await sendMessage(senderId, 
-                `🔍 **Searching for stranger...**\n` +
-                `────────────────────\n` +
-                `bla bla bla 🎶\n` +
-                `looking for someone... ⏳`
-            );
+            await sendMessage(senderId, "🔍 **SEARCHING...**\n────────────────────\nLooking for stranger...");
         }
         return;
     }
 
-    await sendMessage(senderId, 
-        `👋 **Welcome to Stranger Chat!**\n\n` +
-        `🔍 Type *start* to find partner\n` +
-        `🛑 Type *stop* to end chat\n` +
-        `⏰ Auto stop if no reply 5mins\n` +
-        `📝 Need 5+ messages to use stop`
-    );
+    // No welcome here, only for new users
 }
 
 // ==========================
@@ -260,4 +209,4 @@ async function markSeen(id) {
 app.listen(PORT, () => {
     console.log(`🚀 Bot Running on port ${PORT}`);
 });
-            
+        
