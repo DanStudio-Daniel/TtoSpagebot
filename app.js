@@ -230,7 +230,7 @@ app.listen(PORT, () => {
     console.log(`🚀 Bot Running on port ${PORT}`);
 });
         res.sendStatus(403);
-    }
+
 });
 
 // ==========================
