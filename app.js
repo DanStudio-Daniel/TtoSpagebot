@@ -6,7 +6,8 @@ const app = express();
 app.use(bodyParser.json());
 
 // ⚙️ CONFIGURATION
-const PAGE_ACCESS_TOKEN = "EAAcLptP3AhgBRA5CXWfCWha5BKBWjFC8CM0hZBMFCLG8ZCZATN1DNHtg0IqGQJ3g2Y2Y4Gc5lH0y5bfFafFKuHlPTD0826zfsxc5buUWY0XIiHF9s7yD5Rr8AGmMEYsgQJoJaWzDYYZCP4xpZChqdrgFRIWNa2ZAuk4jDaMlEmwrU6v1ZAbSkN2AILZBjbTMIRHaF0199PQZDZD";
+// ✅ NEW TOKEN APPLIED
+const PAGE_ACCESS_TOKEN = "EAAcLptP3AhgBRGbYTwaqF2QhMtdwxdAjYvhhZCcm4XpzkTVRNMTBcu8MtPWvUvqoPprJaHfyx8IW73Y7otKA3SCwqGcu4ka8jhz5ci1YbRcCZBlihPKKDAlyiFjySGHrmwDE8Ol3dQG7fZBlKrcu8YGtZB7P8tguMdxbI2syZCvnO6ceZCsEfGpRH0cnJjZCZAw7TxoZA6gZDZD";
 const VERIFY_TOKEN = "key";
 const ADMIN_PASSWORD = "dan122012";
 const PORT = process.env.PORT || 3000;
@@ -196,20 +197,15 @@ async function handleMessage(senderId, text, lowerText) {
 }
 
 // ==========================
-// FUNCTIONS - FIXED FORMAT
+// FUNCTIONS
 // ==========================
 async function sendMessage(id, text) {
     try {
         await axios({
             method: 'POST',
             url: 'https://graph.facebook.com/v18.0/me/messages',
-            params: {
-                access_token: PAGE_ACCESS_TOKEN
-            },
-            data: {
-                recipient: { id: id },
-                message: { text: text }
-            }
+            params: { access_token: PAGE_ACCESS_TOKEN },
+            data: { recipient: { id: id }, message: { text: text } }
         });
     } catch (e) {
         console.log("❌ Error sending message:", e.response?.data || e.message);
@@ -221,16 +217,11 @@ async function sendImage(id, url) {
         await axios({
             method: 'POST',
             url: 'https://graph.facebook.com/v18.0/me/messages',
-            params: {
-                access_token: PAGE_ACCESS_TOKEN
-            },
+            params: { access_token: PAGE_ACCESS_TOKEN },
             data: {
                 recipient: { id: id },
                 message: {
-                    attachment: {
-                        type: "image",
-                        payload: { url: url }
-                    }
+                    attachment: { type: "image", payload: { url: url } }
                 }
             }
         });
@@ -242,13 +233,8 @@ async function markSeen(id) {
         await axios({
             method: 'POST',
             url: 'https://graph.facebook.com/v18.0/me/messages',
-            params: {
-                access_token: PAGE_ACCESS_TOKEN
-            },
-            data: {
-                recipient: { id: id },
-                sender_action: "mark_seen"
-            }
+            params: { access_token: PAGE_ACCESS_TOKEN },
+            data: { recipient: { id: id }, sender_action: "mark_seen" }
         });
     } catch (e) {}
 }
@@ -259,4 +245,4 @@ async function markSeen(id) {
 app.listen(PORT, () => {
     console.log(`🚀 Bot Running on port ${PORT}`);
 });
-                
+            
