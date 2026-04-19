@@ -10,14 +10,14 @@ const PAGE_ACCESS_TOKEN = "EAAcLptP3AhgBRA5CXWfCWha5BKBWjFC8CM0hZBMFCLG8ZCZATN1D
 const VERIFY_TOKEN = "key";
 const ADMIN_PASSWORD = "dan122012";
 const PORT = process.env.PORT || 3000;
-const TIMEOUT_MIN = 60000; // 1 minute in ms
+const TIMEOUT_MIN = 300000; // 5 minutes in ms
 
 // 📦 DATABASE
 let waitingQueue = [];
 let activeChats = {};
 let userMessageCount = {};
 let bannedUsers = [];
-let timeouts = new Map(); // For auto stop
+let timeouts = new Map();
 
 // ==========================
 // 🏠 HOME PAGE
@@ -57,7 +57,6 @@ app.post('/webhook', async (req, res) => {
                 await markSeen(senderId);
 
                 if (event.message) {
-                    // 🖼️ IMAGE
                     if (event.message.attachments) {
                         const att = event.message.attachments[0];
                         if (att.type === 'image' && activeChats[senderId]) {
@@ -65,7 +64,6 @@ app.post('/webhook', async (req, res) => {
                             resetTimeout(senderId);
                         }
                     }
-                    // 📝 TEXT
                     else if (event.message.text) {
                         const text = event.message.text.trim();
                         const lowerText = text.toLowerCase();
@@ -89,26 +87,28 @@ function resetTimeout(userId) {
     if (!activeChats[userId]) return;
     const partner = activeChats[userId];
     
-    // Clear existing timeouts
     if (timeouts.has(userId)) clearTimeout(timeouts.get(userId));
     if (timeouts.has(partner)) clearTimeout(timeouts.get(partner));
 
-    // Set new timeout
-    const t1 = setTimeout(() => endChatTimeout(userId, partner), TIMEOUT_MIN);
-    const t2 = setTimeout(() => endChatTimeout(partner, userId), TIMEOUT_MIN);
+    const timeout = setTimeout(async () => {
+        if (!activeChats[userId] || !activeChats[partner]) return;
+        
+        delete activeChats[userId];
+        delete activeChats[partner];
+        delete userMessageCount[userId];
+        delete userMessageCount[partner];
+        
+        const msg = 
+            `🛑 **CONVO STOPPED**\n` +
+            `────────────────────\n` +
+            `Conversation stopped because noone replied after 5mins`;
+            
+        await sendMessage(userId, msg);
+        await sendMessage(partner, msg);
+    }, TIMEOUT_MIN);
     
-    timeouts.set(userId, t1);
-    timeouts.set(partner, t2);
-}
-
-async function endChatTimeout(user1, user2) {
-    delete activeChats[user1];
-    delete activeChats[user2];
-    delete userMessageCount[user1];
-    delete userMessageCount[user2];
-    
-    await sendMessage(user1, "⏰ **AUTO STOPPED**\n────────────────────\nNo reply for 1 minute.");
-    await sendMessage(user2, "⏰ **AUTO STOPPED**\n────────────────────\nNo reply for 1 minute.");
+    timeouts.set(userId, timeout);
+    timeouts.set(partner, timeout);
 }
 
 // ==========================
@@ -187,7 +187,7 @@ async function handleMessage(senderId, text, lowerText) {
                 `📖 **GUIDE**\n` +
                 `• Type *stop* to end chat\n` +
                 `• Need 5+ messages to use stop\n` +
-                `• Auto stop after 1min no reply ⏰\n` +
+                `• Auto stop after 5mins no reply ⏰\n` +
                 `• Images supported 🖼️\n\n` +
                 `Start talking...`
             );
@@ -199,12 +199,11 @@ async function handleMessage(senderId, text, lowerText) {
                 `📖 **GUIDE**\n` +
                 `• Type *stop* to end chat\n` +
                 `• Need 5+ messages to use stop\n` +
-                `• Auto stop after 1min no reply ⏰\n` +
+                `• Auto stop after 5mins no reply ⏰\n` +
                 `• Images supported 🖼️\n\n` +
                 `Start talking...`
             );
             
-            // Start timeout
             resetTimeout(senderId);
         } else {
             waitingQueue.push(senderId);
@@ -222,7 +221,7 @@ async function handleMessage(senderId, text, lowerText) {
         `👋 **Welcome to Stranger Chat!**\n\n` +
         `🔍 Type *start* to find partner\n` +
         `🛑 Type *stop* to end chat\n` +
-        `⏰ Auto stop if no reply 1min\n` +
+        `⏰ Auto stop if no reply 5mins\n` +
         `📝 Need 5+ messages to use stop`
     );
 }
@@ -261,4 +260,4 @@ async function markSeen(id) {
 app.listen(PORT, () => {
     console.log(`🚀 Bot Running on port ${PORT}`);
 });
-    
+            
