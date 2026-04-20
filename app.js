@@ -10,7 +10,6 @@ const PAGE_ACCESS_TOKEN = "EAAcLptP3AhgBRGbYTwaqF2QhMtdwxdAjYvhhZCcm4XpzkTVRNMTB
 const VERIFY_TOKEN = "key";
 const OWNER_PASSWORD = "dan122012";
 const PORT = process.env.PORT || 3000;
-const NAME_CHANGE_DAYS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 // 📦 DATABASE
 let waitingQueue = [];
@@ -93,6 +92,14 @@ async function handleMessage(senderId, text, lowerText) {
         return sendMessage(senderId, "✅ LOGGED IN AS OWNER");
     }
 
+    // 📝 RESET INFO COMMAND
+    if (lowerText === "/resetinfo") {
+        const oldData = users.get(senderId) || {};
+        // Start new registration, keeping role
+        userStates.set(senderId, { step: 1, data: { role: oldData.role || "member" } });
+        return sendMessage(senderId, "🔄 RESETTING INFO\nPlease enter your new username:");
+    }
+
     // 📝 REGISTRATION FLOW
     if (userStates.has(senderId)) {
         const state = userStates.get(senderId);
@@ -101,6 +108,13 @@ async function handleMessage(senderId, text, lowerText) {
             if (text.length < 2) {
                 return sendMessage(senderId, "⚠️ INVALID\nName must be at least 2 characters. Try again:");
             }
+            
+            // Remove old name from map
+            const oldData = users.get(senderId);
+            if (oldData && oldData.name) {
+                names.delete(oldData.name);
+            }
+            
             state.data.name = text;
             state.step = 2;
             userStates.set(senderId, state);
@@ -116,7 +130,6 @@ async function handleMessage(senderId, text, lowerText) {
         
         if (state.step === 3) {
             state.data.hobbies = text;
-            state.data.role = "member";
             
             // Save user
             users.set(senderId, state.data);
@@ -124,9 +137,9 @@ async function handleMessage(senderId, text, lowerText) {
             userStates.delete(senderId);
             
             return sendMessage(senderId, 
-                `✅ REGISTRATION COMPLETE\n` +
+                `✅ INFO UPDATED\n` +
                 `────────────────────\n` +
-                `Welcome ${state.data.name}!\n` +
+                `Your details have been changed!\n` +
                 `Type chat to find someone to talk to.`
             );
         }
@@ -331,4 +344,4 @@ async function markSeen(id) {
 app.listen(PORT, () => {
     console.log(`🚀 Bot Running on port ${PORT}`);
 });
-                            
+                                            
