@@ -12,7 +12,7 @@ const VERIFY_TOKEN = "key";
 const OWNER_PASSWORD = "dan122012";
 const PORT = process.env.PORT || 10000;
 
-// 📦 MEMORY STORAGE (For matching only)
+// 📦 MEMORY STORAGE
 let waitingQueue = [];
 let activeChats = {};
 let userMessageCount = {};
@@ -31,7 +31,7 @@ mongoose.connect(mongoURI)
 const userSchema = new mongoose.Schema({
     psid: { type: String, required: true, unique: true },
     name: { type: String, required: true },
-    age: { type: Number, required: true }, // Age is Number type
+    age: { type: Number, required: true },
     role: { type: String, default: "member" }
 });
 
@@ -74,25 +74,42 @@ app.post('/webhook', async (req, res) => {
                 await markSeen(senderId);
 
                 if (event.message) {
-                    // ✅ HANDLE LINKS / URLs
-                    if (event.message.text && event.message.text.startsWith("http")) {
-                        if (!activeChats[senderId]) return;
-                        const partner = activeChats[senderId];
-                        await sendMessage(partner, event.message.text);
+                    const text = event.message.text;
+                    const lowerText = text ? text.toLowerCase() : "";
+
+                    // ✅ CHECK COMMANDS FIRST
+                    let commandHandled = false;
+
+                    if (lowerText === "quit") {
+                        await handleQuit(senderId);
+                        commandHandled = true;
+                    }
+                    else if (lowerText.startsWith("/admin ") || lowerText.startsWith("/ban ") || lowerText.startsWith("/unban ")) {
+                        await handleMessage(senderId, text, lowerText);
+                        commandHandled = true;
+                    }
+
+                    if (commandHandled) {
                         return;
                     }
 
+                    // ✅ HANDLE LINKS
+                    if (text && text.startsWith("http")) {
+                        if (!activeChats[senderId]) return;
+                        const partner = activeChats[senderId];
+                        await sendMessage(partner, text);
+                        return;
+                    }
+
+                    // ✅ HANDLE IMAGES
                     if (event.message.attachments) {
                         const att = event.message.attachments[0];
                         if (att.type === 'image' && activeChats[senderId]) {
                             await sendImage(activeChats[senderId], att.payload.url);
                         }
                     }
-                    else if (event.message.text) {
-                        const text = event.message.text;
-                        const lowerText = text.toLowerCase();
-                        
-                        // Count messages
+                    // ✅ NORMAL MESSAGE
+                    else if (text) {
                         if (activeChats[senderId]) {
                             userMessageCount[senderId] = (userMessageCount[senderId] || 0) + 1;
                             const partner = activeChats[senderId];
@@ -115,7 +132,7 @@ app.post('/webhook', async (req, res) => {
 // ==========================
 async function handleMessage(senderId, text, lowerText) {
 
-    // 🔐 HIDDEN OWNER LOGIN
+    // 🔐 OWNER LOGIN
     if (lowerText === "/loginowner dan122012") {
         let userData = await User.findOne({ psid: senderId });
         if (!userData) {
@@ -126,25 +143,20 @@ async function handleMessage(senderId, text, lowerText) {
         return sendMessage(senderId, "✅ LOGGED IN AS OWNER");
     }
 
-    // 📝 RESET INFO COMMAND
+    // 📝 RESET INFO
     if (lowerText === "/resetinfo") {
         const oldData = await User.findOne({ psid: senderId });
         global.tempState = global.tempState || {};
         tempState[senderId] = { step: 1, data: { role: oldData ? oldData.role : "member" } };
-        return sendMessage(senderId, 
-            `🔄 RESETTING INFO\n` +
-            `────────────────────\n` +
-            `Please enter your new username:`
-        );
+        return sendMessage(senderId, `🔄 RESETTING INFO\n────────────────────\nPlease enter your new username:`);
     }
 
-    // 📝 REGISTRATION FLOW
+    // 📝 REGISTRATION
     global.tempState = global.tempState || {};
     if (tempState[senderId]) {
         const state = tempState[senderId];
         
         if (state.step === 1) {
-            // Validation
             if (text.length < 2 || text.length > 20) {
                 return sendMessage(senderId, "⚠️ INVALID\nName must be 2-20 characters. Try again:");
             }
@@ -152,7 +164,6 @@ async function handleMessage(senderId, text, lowerText) {
             if (!regex.test(text)) {
                 return sendMessage(senderId, "⚠️ INVALID\nOnly letters, numbers, space, _ and @ allowed. Try again:");
             }
-            // Check duplicate in DB
             const existing = await User.findOne({ name: text });
             if (existing && existing.psid !== senderId) {
                 return sendMessage(senderId, "❌ USERNAME TAKEN\nChoose another name:");
@@ -160,15 +171,10 @@ async function handleMessage(senderId, text, lowerText) {
 
             state.data.name = text;
             state.step = 2;
-            return sendMessage(senderId, 
-                `📝 QUESTION 2/2\n` +
-                `────────────────────\n` +
-                `Please enter your age (Numbers only):`
-            );
+            return sendMessage(senderId, `📝 QUESTION 2/2\n────────────────────\nPlease enter your age (Numbers only):`);
         }
         
         if (state.step === 2) {
-            // ✅ FIX: Accept numbers only
             const ageNum = parseInt(text);
             if (isNaN(ageNum) || ageNum < 1 || ageNum > 50) {
                 return sendMessage(senderId, "⚠️ INVALID\nAge must be a number between 1-50. Try again:");
@@ -176,7 +182,6 @@ async function handleMessage(senderId, text, lowerText) {
 
             state.data.age = ageNum;
             
-            // Save or Update in DB
             await User.findOneAndUpdate(
                 { psid: senderId },
                 state.data,
@@ -185,54 +190,28 @@ async function handleMessage(senderId, text, lowerText) {
             
             delete tempState[senderId];
             
-            return sendMessage(senderId, 
-                `✅ REGISTRATION COMPLETE\n` +
-                `────────────────────\n` +
-                `Welcome ${state.data.name}!\n` +
-                `Type chat to find someone to talk to.`
-            );
+            return sendMessage(senderId, `✅ REGISTRATION COMPLETE\n────────────────────\nWelcome ${state.data.name}!\nType chat to find someone to talk to.`);
         }
     }
 
-    // 🆕 NEW USER CHECK - SHOW WELCOME MENU
+    // 🆕 NEW USER
     const userData = await User.findOne({ psid: senderId });
     if (!userData) {
         if (lowerText === "/setinfo") {
             global.tempState = global.tempState || {};
             tempState[senderId] = { step: 1, data: {} };
-            return sendMessage(senderId, 
-                `📝 QUESTION 1/2\n` +
-                `────────────────────\n` +
-                `Please enter your username:\n` +
-                `(2-20 chars, letters & numbers only)`
-            );
+            return sendMessage(senderId, `📝 QUESTION 1/2\n────────────────────\nPlease enter your username:\n(2-20 chars, letters & numbers only)`);
         } else {
-            return sendMessage(senderId, 
-                `👋 WELCOME\n` +
-                `────────────────────\n` +
-                `Please type /setinfo to start\n\n` +
-                `📋 COMMANDS:\n` +
-                `/setinfo - Create your account\n` +
-                `/resetinfo - Change your info\n` +
-                `/profile - View your profile\n` +
-                `chat - Find someone to talk\n` +
-                `quit - End conversation`
-            );
+            return sendMessage(senderId, `👋 WELCOME\n────────────────────\nPlease type /setinfo to start\n\n📋 COMMANDS:\n/setinfo - Create your account\n/resetinfo - Change your info\n/profile - View your profile\nchat - Find someone to talk\nquit - End conversation`);
         }
     }
 
-    // 📄 PROFILE COMMAND
+    // 📄 PROFILE
     if (lowerText === "/profile") {
-        return sendMessage(senderId, 
-            `PROFILE\n` +
-            `────────────────────\n` +
-            `Name: ${userData.name}\n` +
-            `Age: ${userData.age}\n` +
-            `Role: ${userData.role}`
-        );
+        return sendMessage(senderId, `PROFILE\n────────────────────\nName: ${userData.name}\nAge: ${userData.age}\nRole: ${userData.role}`);
     }
 
-    // 👑 ADMIN COMMANDS
+    // 👑 ADMIN
     if (lowerText.startsWith("/admin ")) {
         if (userData.role !== "owner") return sendMessage(senderId, "❌ PERMISSION DENIED\nOnly Owner can add/remove admins.");
         
@@ -287,29 +266,7 @@ async function handleMessage(senderId, text, lowerText) {
         return sendMessage(senderId, `✅ UNBANNED\nUser: ${targetName}`);
     }
 
-    // 💬 CHAT / QUIT
-    // ✅ FIX: Moved quit logic here so it works even if not in handleMessage flow
-    if (lowerText === "quit") {
-        if (!activeChats[senderId]) return sendMessage(senderId, "❌ NOT IN CHAT");
-        
-        // Check message count
-        if ((userMessageCount[senderId] || 0) < 2) {
-            return sendMessage(senderId, "⚠️ CANNOT QUIT\nNeed 2+ messages first.");
-        }
-        
-        const partner = activeChats[senderId];
-        
-        // Clear memory data
-        delete activeChats[senderId];
-        delete activeChats[partner];
-        delete userMessageCount[senderId];
-        delete userMessageCount[partner];
-        
-        await sendMessage(senderId, "👋 CONVO ENDED\n────────────────────\nType chat to find new stranger.");
-        await sendMessage(partner, "👋 STRANGER LEFT\n────────────────────\nType chat to find new stranger.");
-        return;
-    }
-
+    // 💬 CHAT
     if (lowerText === "chat") {
         if (activeChats[senderId]) return sendMessage(senderId, "⚠️ ALREADY IN CHAT");
         if (waitingQueue.includes(senderId)) return sendMessage(senderId, "🔍 SEARCHING...");
@@ -324,32 +281,37 @@ async function handleMessage(senderId, text, lowerText) {
             const myData = await User.findOne({ psid: senderId });
             const partnerData = await User.findOne({ psid: partner });
 
-            await sendMessage(senderId, 
-                `🎉 CONNECTED!\n` +
-                `────────────────────\n` +
-                `Name: ${partnerData.name}\n` +
-                `Age: ${partnerData.age}\n` +
-                `Role: ${partnerData.role}\n\n` +
-                `• Type quit to end\n` +
-                `• Need 2+ msg to quit\n` +
-                `• Images supported 🖼️`
-            );
-            await sendMessage(partner, 
-                `🎉 CONNECTED!\n` +
-                `────────────────────\n` +
-                `Name: ${myData.name}\n` +
-                `Age: ${myData.age}\n` +
-                `Role: ${myData.role}\n\n` +
-                `• Type quit to end\n` +
-                `• Need 2+ msg to quit\n` +
-                `• Images supported 🖼️`
-            );
+            await sendMessage(senderId, `🎉 CONNECTED!\n────────────────────\nName: ${partnerData.name}\nAge: ${partnerData.age}\nRole: ${partnerData.role}\n\n• Type quit to end\n• Need 2+ msg to quit\n• Images supported 🖼️`);
+            await sendMessage(partner, `🎉 CONNECTED!\n────────────────────\nName: ${myData.name}\nAge: ${myData.age}\nRole: ${myData.role}\n\n• Type quit to end\n• Need 2+ msg to quit\n• Images supported 🖼️`);
         } else {
             waitingQueue.push(senderId);
             await sendMessage(senderId, "🔍 SEARCHING...\n────────────────────\nLooking for stranger...");
         }
         return;
     }
+}
+
+// ==========================
+// HANDLE QUIT FUNCTION
+// ==========================
+async function handleQuit(senderId) {
+    if (!activeChats[senderId]) {
+        return sendMessage(senderId, "❌ NOT IN CHAT");
+    }
+    
+    if ((userMessageCount[senderId] || 0) < 2) {
+        return sendMessage(senderId, "⚠️ CANNOT QUIT\nNeed 2+ messages first.");
+    }
+    
+    const partner = activeChats[senderId];
+    
+    delete activeChats[senderId];
+    delete activeChats[partner];
+    delete userMessageCount[senderId];
+    delete userMessageCount[partner];
+    
+    await sendMessage(senderId, "👋 CONVO ENDED\n────────────────────\nType chat to find new stranger.");
+    await sendMessage(partner, "👋 STRANGER LEFT\n────────────────────\nType chat to find new stranger.");
 }
 
 // ==========================
@@ -412,4 +374,4 @@ async function markSeen(id) {
 app.listen(PORT, () => {
     console.log(`🚀 Bot Running on port ${PORT}`);
 });
-        
+    
