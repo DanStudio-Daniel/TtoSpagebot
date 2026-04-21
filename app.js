@@ -12,7 +12,7 @@ const VERIFY_TOKEN = "key";
 const OWNER_PASSWORD = "dan122012";
 const PORT = process.env.PORT || 10000;
 
-// 📦 DATABASE - MEMORY STORAGE
+// 📦 MEMORY STORAGE (For matching only)
 let waitingQueue = [];
 let activeChats = {};
 let userMessageCount = {};
@@ -31,7 +31,7 @@ mongoose.connect(mongoURI)
 const userSchema = new mongoose.Schema({
     psid: { type: String, required: true, unique: true },
     name: { type: String, required: true },
-    age: { type: Number, required: true },
+    age: { type: Number, required: true }, // Age is Number type
     role: { type: String, default: "member" }
 });
 
@@ -89,12 +89,12 @@ app.post('/webhook', async (req, res) => {
                         }
                     }
                     else if (event.message.text) {
-                        const text = event.message.text; // Preserve spaces & new lines
+                        const text = event.message.text;
                         const lowerText = text.toLowerCase();
-                        userMessageCount[senderId] = (userMessageCount[senderId] || 0) + 1;
                         
+                        // Count messages
                         if (activeChats[senderId]) {
-                            // Forward message exactly as it is
+                            userMessageCount[senderId] = (userMessageCount[senderId] || 0) + 1;
                             const partner = activeChats[senderId];
                             await sendMessage(partner, text);
                         } else {
@@ -163,11 +163,12 @@ async function handleMessage(senderId, text, lowerText) {
             return sendMessage(senderId, 
                 `📝 QUESTION 2/2\n` +
                 `────────────────────\n` +
-                `Please enter your age, or fake it if you're not comfortable`
+                `Please enter your age (Numbers only):`
             );
         }
         
         if (state.step === 2) {
+            // ✅ FIX: Accept numbers only
             const ageNum = parseInt(text);
             if (isNaN(ageNum) || ageNum < 1 || ageNum > 50) {
                 return sendMessage(senderId, "⚠️ INVALID\nAge must be a number between 1-50. Try again:");
@@ -287,11 +288,18 @@ async function handleMessage(senderId, text, lowerText) {
     }
 
     // 💬 CHAT / QUIT
+    // ✅ FIX: Moved quit logic here so it works even if not in handleMessage flow
     if (lowerText === "quit") {
         if (!activeChats[senderId]) return sendMessage(senderId, "❌ NOT IN CHAT");
-        if ((userMessageCount[senderId] || 0) < 2) return sendMessage(senderId, "⚠️ CANNOT QUIT\nNeed 2+ messages first.");
+        
+        // Check message count
+        if ((userMessageCount[senderId] || 0) < 2) {
+            return sendMessage(senderId, "⚠️ CANNOT QUIT\nNeed 2+ messages first.");
+        }
         
         const partner = activeChats[senderId];
+        
+        // Clear memory data
         delete activeChats[senderId];
         delete activeChats[partner];
         delete userMessageCount[senderId];
@@ -404,4 +412,4 @@ async function markSeen(id) {
 app.listen(PORT, () => {
     console.log(`🚀 Bot Running on port ${PORT}`);
 });
-                    
+        
