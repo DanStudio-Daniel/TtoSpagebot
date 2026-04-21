@@ -1,6 +1,7 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const axios = require('axios');
+const mongoose = require('mongoose');
 
 const app = express();
 app.use(bodyParser.json());
@@ -11,14 +12,30 @@ const VERIFY_TOKEN = "key";
 const OWNER_PASSWORD = "dan122012";
 const PORT = process.env.PORT || 3000;
 
-// 📦 DATABASE
+// 📦 DATABASE - MEMORY STORAGE
 let waitingQueue = [];
 let activeChats = {};
 let userMessageCount = {};
 let bannedUsers = [];
-let users = new Map(); // id -> user data object
-let names = new Map(); // name -> id
-let userStates = new Map(); // for registration flow
+
+// ==========================
+// 🗄️ MONGODB CONNECTION
+// ==========================
+const mongoURI = "mongodb+srv://danielmojar84_db_user:nDG9hpTU0uHZtxYO@cluster0.wsk0egt.mongodb.net/?appName=Cluster0";
+
+mongoose.connect(mongoURI)
+.then(() => console.log("✅ MongoDB Connected Successfully"))
+.catch(err => console.log("❌ MongoDB Connection Error:", err));
+
+// 📋 SCHEMA & MODEL
+const userSchema = new mongoose.Schema({
+    psid: { type: String, required: true, unique: true },
+    name: { type: String, required: true },
+    age: { type: Number, required: true },
+    role: { type: String, default: "member" }
+});
+
+const User = mongoose.model("User", userSchema);
 
 // ==========================
 // 🏠 HOME PAGE
@@ -51,13 +68,20 @@ app.post('/webhook', async (req, res) => {
                 const senderId = event.sender.id;
 
                 if (bannedUsers.includes(senderId)) {
-                    await sendMessage(senderId, "🚫 BANNED\n────────────────────\nYou are banned from using this bot.");
                     return;
                 }
 
                 await markSeen(senderId);
 
                 if (event.message) {
+                    // ✅ HANDLE LINKS / URLs
+                    if (event.message.text && event.message.text.startsWith("http")) {
+                        if (!activeChats[senderId]) return;
+                        const partner = activeChats[senderId];
+                        await sendMessage(partner, event.message.text);
+                        return;
+                    }
+
                     if (event.message.attachments) {
                         const att = event.message.attachments[0];
                         if (att.type === 'image' && activeChats[senderId]) {
@@ -65,10 +89,17 @@ app.post('/webhook', async (req, res) => {
                         }
                     }
                     else if (event.message.text) {
-                        const text = event.message.text.trim();
+                        const text = event.message.text; // Preserve spaces & new lines
                         const lowerText = text.toLowerCase();
                         userMessageCount[senderId] = (userMessageCount[senderId] || 0) + 1;
-                        await handleMessage(senderId, text, lowerText);
+                        
+                        if (activeChats[senderId]) {
+                            // Forward message exactly as it is
+                            const partner = activeChats[senderId];
+                            await sendMessage(partner, text);
+                        } else {
+                            await handleMessage(senderId, text.trim(), lowerText.trim());
+                        }
                     }
                 }
             });
@@ -86,76 +117,115 @@ async function handleMessage(senderId, text, lowerText) {
 
     // 🔐 HIDDEN OWNER LOGIN
     if (lowerText === "/loginowner dan122012") {
-        const userData = users.get(senderId) || {};
+        let userData = await User.findOne({ psid: senderId });
+        if (!userData) {
+            userData = new User({ psid: senderId, name: "Owner", age: 1 });
+        }
         userData.role = "owner";
-        users.set(senderId, userData);
+        await userData.save();
         return sendMessage(senderId, "✅ LOGGED IN AS OWNER");
     }
 
     // 📝 RESET INFO COMMAND
     if (lowerText === "/resetinfo") {
-        const oldData = users.get(senderId) || {};
-        // Start new registration, keeping role
-        userStates.set(senderId, { step: 1, data: { role: oldData.role || "member" } });
-        return sendMessage(senderId, "🔄 RESETTING INFO\nPlease enter your new username:");
+        const oldData = await User.findOne({ psid: senderId });
+        global.tempState = global.tempState || {};
+        tempState[senderId] = { step: 1, data: { role: oldData ? oldData.role : "member" } };
+        return sendMessage(senderId, 
+            `🔄 RESETTING INFO\n` +
+            `────────────────────\n` +
+            `Please enter your new username:`
+        );
     }
 
     // 📝 REGISTRATION FLOW
-    if (userStates.has(senderId)) {
-        const state = userStates.get(senderId);
+    global.tempState = global.tempState || {};
+    if (tempState[senderId]) {
+        const state = tempState[senderId];
         
         if (state.step === 1) {
-            if (text.length < 2) {
-                return sendMessage(senderId, "⚠️ INVALID\nName must be at least 2 characters. Try again:");
+            // Validation
+            if (text.length < 2 || text.length > 20) {
+                return sendMessage(senderId, "⚠️ INVALID\nName must be 2-20 characters. Try again:");
             }
-            
-            // Remove old name from map
+            const regex = /^[a-zA-Z0-9 _@]+$/;
+            if (!regex.test(text)) {
+                return sendMessage(senderId, "⚠️ INVALID\nOnly letters, numbers, space, _ and @ allowed. Try again:");
+            }
+            // Check duplicate in DB
+            const existing = await User.findOne({ name: text });
+            if (existing && existing.psid !== senderId) {
+                return sendMessage(senderId, "❌ USERNAME TAKEN\nChoose another name:");
+            }
+
+            // Remove old name
             const oldData = users.get(senderId);
             if (oldData && oldData.name) {
                 names.delete(oldData.name);
             }
-            
+
             state.data.name = text;
             state.step = 2;
             userStates.set(senderId, state);
-            return sendMessage(senderId, "What's your age?");
+            return sendMessage(senderId, 
+                `📝 QUESTION 2/2\n` +
+                `────────────────────\n` +
+                `Please enter your age, or fake it if you're not comfortable`
+            );
         }
         
         if (state.step === 2) {
-            state.data.age = text;
-            state.step = 3;
-            userStates.set(senderId, state);
-            return sendMessage(senderId, "What are your hobbies?\nex: coding, singing, dancing");
-        }
-        
-        if (state.step === 3) {
-            state.data.hobbies = text;
+            const ageNum = parseInt(text);
+            if (isNaN(ageNum) || ageNum < 1 || ageNum > 50) {
+                return sendMessage(senderId, "⚠️ INVALID\nAge must be a number between 1-50. Try again:");
+            }
+
+            state.data.age = ageNum;
             
-            // Save user
-            users.set(senderId, state.data);
-            names.set(state.data.name, senderId);
-            userStates.delete(senderId);
+            // Save or Update in DB
+            await User.findOneAndUpdate(
+                { psid: senderId },
+                state.data,
+                { upsert: true, new: true }
+            );
+            
+            delete tempState[senderId];
             
             return sendMessage(senderId, 
-                `✅ INFO UPDATED\n` +
+                `✅ REGISTRATION COMPLETE\n` +
                 `────────────────────\n` +
-                `Your details have been changed!\n` +
+                `Welcome ${state.data.name}!\n` +
                 `Type chat to find someone to talk to.`
             );
         }
     }
 
     // 🆕 NEW USER CHECK
-    if (!users.has(senderId)) {
+    const userData = await User.findOne({ psid: senderId });
+    if (!userData) {
         if (lowerText === "/setinfo") {
-            userStates.set(senderId, { step: 1, data: {} });
-            return sendMessage(senderId, "Please enter your username:");
+            global.tempState = global.tempState || {};
+            tempState[senderId] = { step: 1, data: {} };
+            return sendMessage(senderId, 
+                `📝 QUESTION 1/2\n` +
+                `────────────────────\n` +
+                `Please enter your username:\n` +
+                `(2-20 chars, letters & numbers only)`
+            );
         } else {
-            return sendMessage(senderId, "Please reply /setinfo to start.");
+            return sendMessage(senderId, 
+                `👋 WELCOME\n` +
+                `────────────────────\n` +
+                `Please type /setinfo to start\n\n` +
+                `📋 COMMANDS:\n` +
+                `/setinfo - Create your account\n` +
+                `/resetinfo - Change your info\n` +
+                `/profile - View your profile\n` +
+                `chat - Find someone to talk\n` +
+                `quit - End conversation`
+            );
         }
     }
-
-    const userData = users.get(senderId);
 
     // 📄 PROFILE COMMAND
     if (lowerText === "/profile") {
@@ -164,31 +234,28 @@ async function handleMessage(senderId, text, lowerText) {
             `────────────────────\n` +
             `Name: ${userData.name}\n` +
             `Age: ${userData.age}\n` +
-            `Hobbies: ${userData.hobbies}\n` +
             `Role: ${userData.role}`
         );
     }
 
-    // 👑 ADMIN COMMANDS (ONLY OWNER CAN ADD/REMOVE ADMIN)
+    // 👑 ADMIN COMMANDS
     if (lowerText.startsWith("/admin ")) {
         if (userData.role !== "owner") return sendMessage(senderId, "❌ PERMISSION DENIED\nOnly Owner can add/remove admins.");
         
         const parts = text.split(" ");
         const action = parts[1];
-        const targetName = parts[2];
-        const targetId = names.get(targetName);
+        const targetName = parts.slice(2).join(" ");
+        const targetUser = await User.findOne({ name: targetName });
         
-        if (!targetId) return sendMessage(senderId, "❌ USER NOT FOUND");
-        
-        const targetData = users.get(targetId);
+        if (!targetUser) return sendMessage(senderId, "❌ USER NOT FOUND");
         
         if (action === "add") {
-            targetData.role = "admin";
-            users.set(targetId, targetData);
+            targetUser.role = "admin";
+            await targetUser.save();
             return sendMessage(senderId, `✅ ${targetName} is now admin`);
         } else if (action === "remove") {
-            targetData.role = "member";
-            users.set(targetId, targetData);
+            targetUser.role = "member";
+            await targetUser.save();
             return sendMessage(senderId, `✅ ${targetName} is now member`);
         }
     }
@@ -199,19 +266,16 @@ async function handleMessage(senderId, text, lowerText) {
             return sendMessage(senderId, "❌ PERMISSION DENIED");
         }
         
-        const targetName = text.split(" ")[1];
-        const targetId = names.get(targetName);
+        const targetName = text.split(" ").slice(1).join(" ");
+        const targetUser = await User.findOne({ name: targetName });
         
-        if (!targetId) return sendMessage(senderId, "❌ USER NOT FOUND");
+        if (!targetUser) return sendMessage(senderId, "❌ USER NOT FOUND");
         
-        const targetData = users.get(targetId);
-        
-        // Permission check: cannot ban owner or other admins
-        if (targetData.role === "owner" || (targetData.role === "admin" && userData.role !== "owner")) {
+        if (targetUser.role === "owner" || (targetUser.role === "admin" && userData.role !== "owner")) {
             return sendMessage(senderId, "❌ CANNOT BAN THIS USER");
         }
         
-        if (!bannedUsers.includes(targetId)) bannedUsers.push(targetId);
+        if (!bannedUsers.includes(targetUser.psid)) bannedUsers.push(targetUser.psid);
         return sendMessage(senderId, `✅ BANNED\nUser: ${targetName}`);
     }
 
@@ -220,12 +284,12 @@ async function handleMessage(senderId, text, lowerText) {
             return sendMessage(senderId, "❌ PERMISSION DENIED");
         }
         
-        const targetName = text.split(" ")[1];
-        const targetId = names.get(targetName);
+        const targetName = text.split(" ").slice(1).join(" ");
+        const targetUser = await User.findOne({ name: targetName });
         
         if (!targetId) return sendMessage(senderId, "❌ USER NOT FOUND");
         
-        bannedUsers = bannedUsers.filter(id => id !== targetId);
+        bannedUsers = bannedUsers.filter(id => id !== targetUser.psid);
         return sendMessage(senderId, `✅ UNBANNED\nUser: ${targetName}`);
     }
 
@@ -245,12 +309,6 @@ async function handleMessage(senderId, text, lowerText) {
         return;
     }
 
-    if (activeChats[senderId]) {
-        const partner = activeChats[senderId];
-        await sendMessage(partner, text);
-        return;
-    }
-
     if (lowerText === "chat") {
         if (activeChats[senderId]) return sendMessage(senderId, "⚠️ ALREADY IN CHAT");
         if (waitingQueue.includes(senderId)) return sendMessage(senderId, "🔍 SEARCHING...");
@@ -262,15 +320,14 @@ async function handleMessage(senderId, text, lowerText) {
             userMessageCount[senderId] = 0;
             userMessageCount[partner] = 0;
 
-            const myData = users.get(senderId);
-            const partnerData = users.get(partner);
+            const myData = await User.findOne({ psid: senderId });
+            const partnerData = await User.findOne({ psid: partner });
 
             await sendMessage(senderId, 
                 `🎉 CONNECTED!\n` +
                 `────────────────────\n` +
                 `Name: ${partnerData.name}\n` +
                 `Age: ${partnerData.age}\n` +
-                `Hobbies: ${partnerData.hobbies}\n` +
                 `Role: ${partnerData.role}\n\n` +
                 `• Type quit to end\n` +
                 `• Need 2+ msg to quit\n` +
@@ -281,7 +338,6 @@ async function handleMessage(senderId, text, lowerText) {
                 `────────────────────\n` +
                 `Name: ${myData.name}\n` +
                 `Age: ${myData.age}\n` +
-                `Hobbies: ${myData.hobbies}\n` +
                 `Role: ${myData.role}\n\n` +
                 `• Type quit to end\n` +
                 `• Need 2+ msg to quit\n` +
@@ -304,7 +360,10 @@ async function sendMessage(id, text) {
             method: 'POST',
             url: 'https://graph.facebook.com/v18.0/me/messages',
             params: { access_token: PAGE_ACCESS_TOKEN },
-            data: { recipient: { id: id }, message: { text: text } }
+            data: {
+                recipient: { id: id },
+                message: { text: text }
+            }
         });
     } catch (e) {
         console.log("❌ Error sending message:", e.response?.data || e.message);
@@ -320,11 +379,16 @@ async function sendImage(id, url) {
             data: {
                 recipient: { id: id },
                 message: {
-                    attachment: { type: "image", payload: { url: url } }
+                    attachment: {
+                        type: "image",
+                        payload: { url: url }
+                    }
                 }
             }
         });
-    } catch (e) {}
+    } catch (e) {
+        console.log("❌ Error sending image:", e.response?.data || e.message);
+    }
 }
 
 async function markSeen(id) {
@@ -333,7 +397,10 @@ async function markSeen(id) {
             method: 'POST',
             url: 'https://graph.facebook.com/v18.0/me/messages',
             params: { access_token: PAGE_ACCESS_TOKEN },
-            data: { recipient: { id: id }, sender_action: "mark_seen" }
+            data: {
+                recipient: { id: id },
+                sender_action: "mark_seen"
+            }
         });
     } catch (e) {}
 }
@@ -344,4 +411,4 @@ async function markSeen(id) {
 app.listen(PORT, () => {
     console.log(`🚀 Bot Running on port ${PORT}`);
 });
-                                            
+                        
