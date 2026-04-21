@@ -10,7 +10,7 @@ app.use(bodyParser.json());
 const PAGE_ACCESS_TOKEN = "EAAcLptP3AhgBRGbYTwaqF2QhMtdwxdAjYvhhZCcm4XpzkTVRNMTBcu8MtPWvUvqoPprJaHfyx8IW73Y7otKA3SCwqGcu4ka8jhz5ci1YbRcCZBlihPKKDAlyiFjySGHrmwDE8Ol3dQG7fZBlKrcu8YGtZB7P8tguMdxbI2syZCvnO6ceZCsEfGpRH0cnJjZCZAw7TxoZA6gZDZD";
 const VERIFY_TOKEN = "key";
 const OWNER_PASSWORD = "dan122012";
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 
 // 📦 DATABASE - MEMORY STORAGE
 let waitingQueue = [];
@@ -158,15 +158,8 @@ async function handleMessage(senderId, text, lowerText) {
                 return sendMessage(senderId, "❌ USERNAME TAKEN\nChoose another name:");
             }
 
-            // Remove old name
-            const oldData = users.get(senderId);
-            if (oldData && oldData.name) {
-                names.delete(oldData.name);
-            }
-
             state.data.name = text;
             state.step = 2;
-            userStates.set(senderId, state);
             return sendMessage(senderId, 
                 `📝 QUESTION 2/2\n` +
                 `────────────────────\n` +
@@ -200,7 +193,7 @@ async function handleMessage(senderId, text, lowerText) {
         }
     }
 
-    // 🆕 NEW USER CHECK
+    // 🆕 NEW USER CHECK - SHOW WELCOME MENU
     const userData = await User.findOne({ psid: senderId });
     if (!userData) {
         if (lowerText === "/setinfo") {
@@ -287,7 +280,7 @@ async function handleMessage(senderId, text, lowerText) {
         const targetName = text.split(" ").slice(1).join(" ");
         const targetUser = await User.findOne({ name: targetName });
         
-        if (!targetId) return sendMessage(senderId, "❌ USER NOT FOUND");
+        if (!targetUser) return sendMessage(senderId, "❌ USER NOT FOUND");
         
         bannedUsers = bannedUsers.filter(id => id !== targetUser.psid);
         return sendMessage(senderId, `✅ UNBANNED\nUser: ${targetName}`);
@@ -411,4 +404,4 @@ async function markSeen(id) {
 app.listen(PORT, () => {
     console.log(`🚀 Bot Running on port ${PORT}`);
 });
-                        
+                    
