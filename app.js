@@ -33,24 +33,16 @@ const userSchema = new mongoose.Schema({
     name: { type: String, required: true },
     age: { type: Number, required: true },
     role: { type: String, default: "member" },
-    isBanned: { type: Boolean, default: false } // 🛡️ Persistent Ban
+    isBanned: { type: Boolean, default: false }
 });
 
 const User = mongoose.model("User", userSchema);
-
-// ==========================
-// 🏠 HOME PAGE
-// ==========================
-app.get('/', (req, res) => {
-    res.send('<h1>Bot is running</h1>');
-});
 
 // ==========================
 // WEBHOOK VERIFICATION
 // ==========================
 app.get('/webhook', (req, res) => {
     if (req.query['hub.mode'] === 'subscribe' && req.query['hub.verify_token'] === VERIFY_TOKEN) {
-        console.log("✅ Webhook Verified");
         res.status(200).send(req.query['hub.challenge']);
     } else {
         res.sendStatus(403);
@@ -68,15 +60,11 @@ app.post('/webhook', async (req, res) => {
             entry.messaging.forEach(async event => {
                 const senderId = event.sender.id;
 
-                // 👁️ SYNC SEEN STATUS
-                if (event.read) {
-                    if (activeChats[senderId]) {
-                        await markSeen(activeChats[senderId]);
-                    }
+                if (event.read && activeChats[senderId]) {
+                    await markSeen(activeChats[senderId]);
                     return;
                 }
 
-                // 🛑 CHECK BAN STATUS
                 const userData = await User.findOne({ psid: senderId });
                 if (userData && userData.isBanned) return;
 
@@ -86,23 +74,22 @@ app.post('/webhook', async (req, res) => {
                     const text = event.message.text;
                     const lowerText = text ? text.toLowerCase() : "";
 
-                    // ✅ CHECK COMMANDS FIRST
                     let commandHandled = false;
-
                     if (lowerText === "quit") {
                         await handleQuit(senderId);
                         commandHandled = true;
                     }
-                    else if (lowerText.startsWith("/admin ") || lowerText.startsWith("/ban ") || lowerText.startsWith("/unban ") || lowerText.startsWith("/loginowner ") || lowerText === "/setinfo" || lowerText === "/resetinfo" || tempState[senderId]) {
+                    else if (lowerText.startsWith("/admin ") || lowerText.startsWith("/ban ") || lowerText.startsWith("/unban ") || lowerText.startsWith("/loginowner ") || lowerText === "/setinfo" || tempState[senderId]) {
                         await handleMessage(senderId, text, lowerText);
                         commandHandled = true;
                     }
 
                     if (commandHandled) return;
 
-                    // ✅ NORMAL MESSAGE / ACTIVE CHAT
                     if (activeChats[senderId]) {
-                        if (event.message.attachments) {
+                        if (text && text.startsWith("http")) {
+                            await sendMessage(activeChats[senderId], text);
+                        } else if (event.message.attachments) {
                             const att = event.message.attachments[0];
                             if (att.type === 'image') await sendImage(activeChats[senderId], att.payload.url);
                         } else if (text) {
@@ -113,7 +100,7 @@ app.post('/webhook', async (req, res) => {
                         if (lowerText === "chat" || lowerText === "/profile") {
                             await handleMessage(senderId, text, lowerText);
                         } else if (!userData) {
-                            await sendMessage(senderId, `👋 WELCOME\n────────────────────\nYour account is not initialized.\nPlease type /setinfo to start.`);
+                            await sendMessage(senderId, `👋 WELCOME\n────────────────────\nPlease type /setinfo to start\n\n📋 COMMANDS:\n/setinfo - Create/Update your account\n/profile - View your profile\nchat - Find someone to talk\nquit - End conversation`);
                         }
                     }
                 }
@@ -131,195 +118,148 @@ app.post('/webhook', async (req, res) => {
 async function handleMessage(senderId, text, lowerText) {
     let userData = await User.findOne({ psid: senderId });
 
-    // 🔐 OWNER LOGIN
     if (lowerText === "/loginowner dan122012") {
-        if (!userData) {
-            userData = new User({ psid: senderId, name: "Owner", age: 1 });
-        }
+        if (!userData) userData = new User({ psid: senderId, name: "Owner", age: 1 });
         userData.role = "owner";
         await userData.save();
         return sendMessage(senderId, "✅ AUTHENTICATION SUCCESS\nYou are now logged in as OWNER.");
     }
 
-    // 📝 REGISTRATION & INFO
-    if (lowerText === "/setinfo" || lowerText === "/resetinfo" || tempState[senderId]) {
-        if (lowerText === "/setinfo" || lowerText === "/resetinfo") {
+    if (lowerText === "/setinfo" || tempState[senderId]) {
+        if (lowerText === "/setinfo") {
+            const mode = userData ? "CHANGING PROFILE" : "REGISTRATION";
             tempState[senderId] = { step: 1, data: { role: userData ? userData.role : "member" } };
-            return sendMessage(senderId, `📝 REGISTRATION: STEP 1/2\n────────────────────\nPlease enter your desired username:`);
+            return sendMessage(senderId, `📝 ${mode}: STEP 1/2\n────────────────────\nPlease enter your username (2-20 characters):`);
         }
 
         const state = tempState[senderId];
         if (state.step === 1) {
-            if (!text || text.length < 2) {
-                return sendMessage(senderId, "⚠️ INVALID INPUT\nUsername is too short. Please try again:");
+            // 🛑 USERNAME VALIDATION (2-20 chars)
+            if (!text || text.length < 2 || text.length > 20) {
+                return sendMessage(senderId, "⚠️ INVALID USERNAME\nYour name must be between 2 and 20 characters. Please try again:");
             }
+
+            const existing = await User.findOne({ name: text });
+            if (existing && existing.psid !== senderId) {
+                return sendMessage(senderId, "❌ NAME TAKEN\nThis username is already in use. Please choose another one:");
+            }
+            
             state.data.name = text;
             state.step = 2;
-            return sendMessage(senderId, `📝 REGISTRATION: STEP 2/2\n────────────────────\nPlease enter your age:`);
+            return sendMessage(senderId, `📝 STEP 2/2\n────────────────────\nPlease enter your age (15-100):`);
         }
         
         if (state.step === 2) {
             const ageNum = parseInt(text);
+            // 🛑 AGE VALIDATION (15-100)
             if (isNaN(ageNum)) {
-                return sendMessage(senderId, "❌ TYPE ERROR\nThat's not a number! Please enter your age using numeric digits (e.g., 21):");
+                return sendMessage(senderId, "❌ TYPE ERROR\nThat's not a number! Please enter your age using digits:");
             }
-            if (ageNum < 1 || ageNum > 100) {
-                return sendMessage(senderId, "⚠️ OUT OF RANGE\nPlease enter a valid age between 1 and 100:");
+            if (ageNum < 15 || ageNum > 100) {
+                return sendMessage(senderId, "⚠️ OUT OF RANGE\nAge must be between 15 and 100 years old. Please try again:");
             }
-
+            
             state.data.age = ageNum;
             await User.findOneAndUpdate({ psid: senderId }, state.data, { upsert: true });
             delete tempState[senderId];
-            return sendMessage(senderId, `✅ PROFILE SYNCHRONIZED\n────────────────────\nWelcome ${state.data.name}!\nYour account is now active.\n\nType 'chat' to find a partner.`);
+            return sendMessage(senderId, `✅ PROFILE UPDATED\nWelcome ${state.data.name}!\nType 'chat' to find someone.`);
         }
         return;
     }
 
     if (!userData) return;
 
-    // 📄 PROFILE
     if (lowerText === "/profile") {
-        return sendMessage(senderId, `👤 USER PROFILE\n────────────────────\nName: ${userData.name}\nAge: ${userData.age}\nRole: ${userData.role.toUpperCase()}`);
+        return sendMessage(senderId, `👤 PROFILE\n────────────────────\nName: ${userData.name}\nAge: ${userData.age}\nRole: ${userData.role.toUpperCase()}`);
     }
 
-    // 👑 ADMIN
     if (lowerText.startsWith("/admin ")) {
-        if (userData.role !== "owner") return sendMessage(senderId, "❌ PERMISSION DENIED\nAdministrative privileges required to perform this action.");
-        
+        if (userData.role !== "owner") {
+            return sendMessage(senderId, "❌ PERMISSION DENIED\nOnly the Owner can manage administrative roles.");
+        }
         const parts = text.split(" ");
-        const action = parts[1]; // add or remove
+        const action = parts[1];
         const targetName = parts.slice(2).join(" ");
-        
-        if (!targetName) return sendMessage(senderId, "⚠️ ARGUMENT MISSING\nUsage: /admin [add/remove] [username]");
-
         const targetUser = await User.findOne({ name: targetName });
-        if (!targetUser) return sendMessage(senderId, `❌ SEARCH FAILED\nUser '${targetName}' was not found in our database.`);
-        
+        if (!targetUser) return sendMessage(senderId, "❌ USER NOT FOUND");
         if (action === "add") {
             targetUser.role = "admin";
             await targetUser.save();
-            await sendMessage(targetUser.psid, `🎊 STATUS UPDATE\nYou have been applied to ADMIN.\n\n🛡️ PERMISSIONS GRANTED:\nYou can now use /ban and /unban.`);
-            return sendMessage(senderId, `✅ STATUS UPDATED\n${targetName} has been promoted to Admin.`);
+            await sendMessage(targetUser.psid, `🎊 STATUS UPDATE\nYou have been applied to ADMIN.\n\n🛡️ YOU CAN NOW USE:\n/ban [name]\n/unban [name]`);
+            return sendMessage(senderId, `✅ SUCCESS\n${targetName} is now an admin.`);
         } else if (action === "remove") {
             targetUser.role = "member";
             await targetUser.save();
-            return sendMessage(senderId, `✅ STATUS UPDATED\n${targetName} has been demoted to Member.`);
-        } else {
-            return sendMessage(senderId, "⚠️ INVALID ACTION\nUse 'add' or 'remove'.");
+            return sendMessage(senderId, `✅ SUCCESS\n${targetName} has been demoted to member.`);
         }
     }
 
-    // 🛡️ BAN / UNBAN
     if (lowerText.startsWith("/ban ")) {
-        if (userData.role !== "owner" && userData.role !== "admin") return sendMessage(senderId, "❌ PERMISSION DENIED\nYou do not have authority to ban users.");
-        
+        if (userData.role !== "owner" && userData.role !== "admin") return sendMessage(senderId, "❌ PERMISSION DENIED");
         const targetName = text.split(" ").slice(1).join(" ");
-        if (!targetName) return sendMessage(senderId, "⚠️ ARGUMENT MISSING\nUsage: /ban [username]");
-
         const targetUser = await User.findOne({ name: targetName });
-        
-        if (!targetUser) return sendMessage(senderId, `❌ SEARCH FAILED\nUser '${targetName}' not found.`);
+        if (!targetUser) return sendMessage(senderId, "❌ USER NOT FOUND");
         if (targetUser.role === "owner" || (targetUser.role === "admin" && userData.role !== "owner")) {
-            return sendMessage(senderId, "❌ PROTECTION ERROR\nYou cannot ban this user due to their security level.");
+            return sendMessage(senderId, "❌ PROTECTION ERROR\nYou cannot ban this user.");
         }
-        
         targetUser.isBanned = true;
         await targetUser.save();
-
         if (activeChats[targetUser.psid]) {
             const partner = activeChats[targetUser.psid];
             delete activeChats[targetUser.psid]; delete activeChats[partner];
-            await sendMessage(partner, "⚠️ SESSION TERMINATED\nYour partner was banned for violating community guidelines.");
-            await sendMessage(targetUser.psid, "❌ ACCESS REVOKED\nYou have been banned from this platform.");
+            await sendMessage(partner, "⚠️ Your partner was banned.");
+            await sendMessage(targetUser.psid, "❌ You have been banned.");
         }
-        return sendMessage(senderId, `🚫 BAN CONFIRMED\nUser '${targetName}' has been restricted.`);
+        return sendMessage(senderId, `🚫 BANNED: ${targetName}`);
     }
 
     if (lowerText.startsWith("/unban ")) {
         if (userData.role !== "owner" && userData.role !== "admin") return sendMessage(senderId, "❌ PERMISSION DENIED");
         const targetName = text.split(" ").slice(1).join(" ");
-        if (!targetName) return sendMessage(senderId, "⚠️ ARGUMENT MISSING\nUsage: /unban [username]");
-
         const targetUser = await User.findOne({ name: targetName });
-        if (!targetUser) return sendMessage(senderId, "❌ SEARCH FAILED");
-        
-        targetUser.isBanned = false;
-        await targetUser.save();
-        return sendMessage(senderId, `🔓 RESTRICTION LIFTED\nUser '${targetName}' is now unbanned.`);
+        if (targetUser) {
+            targetUser.isBanned = false;
+            await targetUser.save();
+            return sendMessage(senderId, `🔓 UNBANNED: ${targetName}`);
+        }
     }
 
-    // 💬 CHAT
     if (lowerText === "chat") {
-        if (activeChats[senderId]) return sendMessage(senderId, "⚠️ STATE ERROR\nYou are already in an active session.");
-        if (waitingQueue.includes(senderId)) return sendMessage(senderId, "🔍 SEARCHING...\nWe are looking for a match in the global queue.");
-
-        const partner = waitingQueue.length > 0 ? waitingQueue.shift() : null;
+        if (activeChats[senderId]) return sendMessage(senderId, "⚠️ ALREADY IN CHAT");
+        if (waitingQueue.includes(senderId)) return sendMessage(senderId, "🔍 SEARCHING...");
+        const partner = waitingQueue.shift();
         if (partner) {
-            activeChats[senderId] = partner;
-            activeChats[partner] = senderId;
-            userMessageCount[senderId] = 0;
-            userMessageCount[partner] = 0;
-
+            activeChats[senderId] = partner; activeChats[partner] = senderId;
+            userMessageCount[senderId] = 0; userMessageCount[partner] = 0;
+            const pData = await User.findOne({ psid: partner });
             const myData = await User.findOne({ psid: senderId });
-            const partnerData = await User.findOne({ psid: partner });
-
-            await sendMessage(senderId, `🎉 MATCH FOUND!\n────────────────────\nName: ${partnerData.name}\nAge: ${partnerData.age}\nRole: ${partnerData.role.toUpperCase()}`);
-            await sendMessage(partner, `🎉 MATCH FOUND!\n────────────────────\nName: ${myData.name}\nAge: ${myData.age}\nRole: ${myData.role.toUpperCase()}`);
+            await sendMessage(senderId, `🎉 CONNECTED!\nName: ${pData.name}\nAge: ${pData.age}`);
+            await sendMessage(partner, `🎉 CONNECTED!\nName: ${myData.name}\nAge: ${myData.age}`);
         } else {
             waitingQueue.push(senderId);
-            await sendMessage(senderId, "🔍 SEARCHING...\n────────────────────\nPlease wait while we find a stranger...");
+            await sendMessage(senderId, "🔍 SEARCHING...");
         }
     }
 }
 
-// ==========================
-// HANDLE QUIT FUNCTION
-// ==========================
-async function handleQuit(senderId) {
-    if (!activeChats[senderId]) return sendMessage(senderId, "❌ SESSION ERROR\nYou are not currently connected to anyone.");
-    if ((userMessageCount[senderId] || 0) < 2) return sendMessage(senderId, "⚠️ RESTRICTION\nYou must exchange at least 2 messages before ending the conversation.");
-    
-    const partner = activeChats[senderId];
-    delete activeChats[senderId]; delete activeChats[partner];
-    delete userMessageCount[senderId]; delete userMessageCount[partner];
-    
-    await sendMessage(senderId, "👋 SESSION ENDED\nType 'chat' to find a new partner.");
-    await sendMessage(partner, "👋 STRANGER DISCONNECTED\nYour partner has left the conversation.");
+async function handleQuit(id) {
+    const partner = activeChats[id];
+    if (!partner) return sendMessage(id, "❌ NOT IN CHAT");
+    if ((userMessageCount[id] || 0) < 2) return sendMessage(id, "⚠️ Send 2+ messages first.");
+    delete activeChats[id]; delete activeChats[partner];
+    await sendMessage(id, "👋 ENDED."); await sendMessage(partner, "👋 STRANGER LEFT.");
 }
 
-// ==========================
-// FUNCTIONS
-// ==========================
 async function sendMessage(id, text) {
-    try {
-        await axios.post(`https://graph.facebook.com/v18.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`, {
-            recipient: { id: id },
-            message: { text: text }
-        });
-    } catch (e) { console.log("❌ DISPATCH ERROR: Unable to send message."); }
+    try { await axios.post(`https://graph.facebook.com/v18.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`, { recipient: { id }, message: { text } }); } catch (e) {}
 }
 
 async function sendImage(id, url) {
-    try {
-        await axios.post(`https://graph.facebook.com/v18.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`, {
-            recipient: { id: id },
-            message: { attachment: { type: "image", payload: { url: url } } }
-        });
-    } catch (e) { console.log("❌ MEDIA ERROR: Unable to send image."); }
+    try { await axios.post(`https://graph.facebook.com/v18.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`, { recipient: { id }, message: { attachment: { type: "image", payload: { url } } } }); } catch (e) {}
 }
 
 async function markSeen(id) {
-    try {
-        await axios.post(`https://graph.facebook.com/v18.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`, {
-            recipient: { id: id },
-            sender_action: "mark_seen"
-        });
-    } catch (e) { }
+    try { await axios.post(`https://graph.facebook.com/v18.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`, { recipient: { id }, sender_action: "mark_seen" }); } catch (e) {}
 }
 
-// ==========================
-// START SERVER
-// ==========================
-app.listen(PORT, () => {
-    console.log(`🚀 System Online: Listening on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`🚀 Bot Active on ${PORT}`));
