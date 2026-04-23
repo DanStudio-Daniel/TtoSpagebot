@@ -7,7 +7,7 @@ const app = express();
 app.use(bodyParser.json());
 
 // ⚙️ CONFIGURATION
-const PAGE_ACCESS_TOKEN = "EAAcLptP3AhgBRGbYTwaqF2QhMtdwxdAjYvhhZCcm4XpzkTVRNMTBcu8MtPWvUvqoPprJaHfyx8IW73Y7otKA3SCwqGcu4ka8jhz5ci1YbRcCZBlihPKKDAlyiFjySGHrmwDE8Ol3dQG7fZBlKrcu8YGtZB7P8tguMdxbI2syZCvnO6ceZCsEfGpRH0cnJjZCZAw7TxoZA6gZDZD";
+const PAGE_ACCESS_TOKEN = "EAAcLptP3AhgBRVaudVLZCUnjnZCNvMNBjsN1vtW3circdCouQQit1r6oEp3kMVbRJJUplqd6YFFqPySY15rksGpZClkFbOItZCf7Vkxf7ZBctmxGAxghQDfGYWaP7fYLNROXH6UDCSWgttQYEHQqww7IOpZBxMNJLnX4dyWGH12cKlVtXuKlAQCSzlOAnLntvbfnZAmDAZDZD";
 const VERIFY_TOKEN = "key";
 const OWNER_PASSWORD = "dan122012";
 const PORT = process.env.PORT || 10000;
@@ -190,7 +190,7 @@ async function handleMessage(senderId, text, lowerText) {
             
             delete tempState[senderId];
             
-            return sendMessage(senderId, `✅ REGISTRATION COMPLETE\n────────────────────\nWelcome ${state.data.name}!\nType chat to find someone to talk to.`);
+            return sendMessage(senderId, `✅ REGISTRATION COMPLETE\n────────────────────\nWelcome ${state.data.name}!\nreset your info anytime via /resetinfo.\n\nType chat to find someone to talk to.`);
         }
     }
 
